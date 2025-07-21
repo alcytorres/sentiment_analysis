@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import json
+import re
 
 app = Flask(__name__)
 analyzer = SentimentIntensityAnalyzer()
@@ -35,7 +36,8 @@ def analyze_sentiment(text):
 def index():
     if request.method == 'POST':
         input_text = request.form['text']
-        texts = input_text.strip().split('\n')  # Batch by newlines
+        # Split only on three or more consecutive newlines
+        texts = re.split(r'\n\s*\n\s*\n\s*', input_text.strip())
         results = [analyze_sentiment(t.strip()) for t in texts if t.strip()]
         
         # Aggregate for chart if batch
