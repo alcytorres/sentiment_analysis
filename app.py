@@ -1,35 +1,62 @@
 from flask import Flask, render_template, request
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from transformers import pipeline
 import json
 import re
 
 app = Flask(__name__)
-analyzer = SentimentIntensityAnalyzer()
+sentiment_pipeline = pipeline("sentiment-analysis", model="ProsusAI/finbert")
 
 def analyze_sentiment(text):
-    scores = analyzer.polarity_scores(text)
-    compound = scores['compound']
-    if compound >= 0.75:
-        label = "Strongly Positive"
-    elif compound > 0.25:
-        label = "Positive"
-    elif compound <= -0.75:
-        label = "Strongly Negative"
-    elif compound < -0.25:
-        label = "Negative"
-    else:
-        label = "Neutral"
+    result = sentiment_pipeline(text)[0]
+    label = result['label'].capitalize()
+    score = result['score']
     
-    confidence = abs(compound) * 100  # Simple confidence as % of |compound|
-    explanation = f"Based on positive: {scores['pos']:.2f}, neutral: {scores['neu']:.2f}, negative: {scores['neg']:.2f} scores."
+    if label == 'Positive' and score >= 0.75:
+        final_label = "Strongly Positive"
+    elif label == 'Positive':
+        final_label = "Positive"
+    elif label == 'Negative' and score >= 0.75:
+        final_label = "Strongly Negative"
+    elif label == 'Negative':
+        final_label = "Negative"
+    else:
+        final_label = "Neutral"
+    
+    # Approximate pos, neu, neg
+    if label == 'Positive':
+        pos = score
+        neg = 0
+        neu = 1 - score
+    elif label == 'Negative':
+        neg = score
+        pos = 0
+        neu = 1 - score
+    else:
+        neu = score
+        pos = 0
+        neg = 0
+    
+    # Explanation with key words
+    explanation = f"{final_label} with confidence {score:.2f}, based on financial sentiment analysis."
+    
+    positive_words = ['growth', 'profit', 'bull', 'surge', 'strong', 'beat', 'rise']
+    negative_words = ['loss', 'decline', 'bear', 'crash', 'weak', 'miss', 'fall']
+    
+    found_pos = [word for word in positive_words if word in text.lower()]
+    found_neg = [word for word in negative_words if word in text.lower()]
+    
+    if found_pos:
+        explanation += f" Key positive indicators: {', '.join(found_pos)}."
+    if found_neg:
+        explanation += f" Key negative indicators: {', '.join(found_neg)}."
     
     return {
-        'label': label,
-        'score': f"{confidence:.2f}%",
+        'label': final_label,
+        'score': f"{score * 100:.2f}%",
         'explanation': explanation,
-        'pos': scores['pos'],
-        'neu': scores['neu'],
-        'neg': scores['neg']
+        'pos': pos,
+        'neu': neu,
+        'neg': neg
     }
 
 @app.route('/', methods=['GET', 'POST'])
