@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!-- <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -13,6 +13,61 @@
     <h1>Sentiment Analysis Bot</h1>
     <form method="post">
         <textarea name="text" rows="10" cols="50" placeholder="Paste text here. For batch, separate by newlines."></textarea><br>
+        <input type="submit" value="Analyze">
+    </form>
+    
+    {% if results %}
+        <h2>Results</h2>
+        <table>
+            <tr><th>Label</th><th>Score</th><th>Explanation</th></tr>
+            {% for result in results %}
+                <tr>
+                    <td>{{ result.label }}</td>
+                    <td>{{ result.score }}</td>
+                    <td>{{ result.explanation }}</td>
+                </tr>
+            {% endfor %}
+        </table>
+        
+        <h2>Sentiment Distribution</h2>
+        <canvas id="sentimentChart" width="400" height="200"></canvas>
+        <script>
+            var ctx = document.getElementById('sentimentChart').getContext('2d');
+            var chartData = {{ chart_data | safe }};
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: chartData.labels,
+                    datasets: [{
+                        label: 'Scores',
+                        data: chartData.data,
+                        backgroundColor: ['green', 'gray', 'red']
+                    }]
+                },
+                options: { scales: { y: { beginAtZero: true, max: 1 } } }
+            });
+        </script>
+    {% endif %}
+</body>
+</html> -->
+
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Sentiment Analysis Bot</title>
+    <script src="{{ url_for('static', filename='chart.js') }}"></script>
+    <style>
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid black; padding: 8px; text-align: left; }
+    </style>
+</head>
+<body>
+    <h1>Sentiment Analysis Bot</h1>
+    <form method="post">
+        <textarea name="text" rows="10" cols="50" placeholder="Paste text here. For batch, separate by newlines.">{{ input_text | safe }}</textarea><br>
         <input type="submit" value="Analyze">
     </form>
     
