@@ -163,6 +163,9 @@ def index():
                 'data': [results[0]['pos'], results[0]['neu'], results[0]['neg']]
             }) if results else None
         
+        print(results)  # Debug: Print results to check pos, neu, neg values
+        # In index() function, before return render_template
+        print("Chart Data:", chart_data)
         return render_template('index.html', results=results, chart_data=chart_data, input_text=input_text)
     
     return render_template('index.html', results=None, chart_data=None, input_text=input_text)

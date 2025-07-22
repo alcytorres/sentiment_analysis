@@ -1,20 +1,20 @@
 /* eslint-disable @typescript-eslint/ban-types */
 import {DeepPartial, DistributiveArray, UnionToIntersection} from './utils.js';
 
-import {TimeUnit} from '../core/core.adapters.js';
-import PointElement from '../elements/element.point.js';
-import {EasingFunction} from '../helpers/helpers.easing.js';
+import {TimeUnit} from '../core/core.adapters.ts';
+import PointElement from '../elements/element.point.ts';
+import {EasingFunction} from '../helpers/helpers.easing.ts';
 import {AnimationEvent} from './animation.js';
 import {AnyObject, EmptyObject} from './basic.js';
 import {Color} from './color.js';
-import Element from '../core/core.element.js';
+import Element from '../core/core.element.ts';
 import {ChartArea, Padding, Point} from './geometric.js';
 import {LayoutItem, LayoutPosition} from './layout.js';
-import {ColorsPluginOptions} from '../plugins/plugin.colors.js';
+import {ColorsPluginOptions} from '../plugins/plugin.colors.ts';
 
-export {EasingFunction} from '../helpers/helpers.easing.js';
-export {default as ArcElement, ArcProps} from '../elements/element.arc.js';
-export {default as PointElement, PointProps} from '../elements/element.point.js';
+export {EasingFunction} from '../helpers/helpers.easing.ts';
+export {default as ArcElement, ArcProps} from '../elements/element.arc.ts';
+export {default as PointElement, PointProps} from '../elements/element.point.ts';
 export {Animation, Animations, Animator, AnimationEvent} from './animation.js';
 export {Color} from './color.js';
 export {ChartArea, Point, TRBL} from './geometric.js';

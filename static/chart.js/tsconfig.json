@@ -11,7 +11,7 @@
     // "noUnusedLocals": true,
     // "noUnusedParameters": true,
     /* Modules */
-    "baseUrl": ".",
+    "baseUrl": "",
     "module": "ESNext",
     "moduleResolution": "NodeNext",
     "resolveJsonModule": true,
@@ -40,9 +40,9 @@
     "out": "./dist/docs/typedoc"
   },
   "include": [
-    "./src/**/*"
+    "src/**/*"
   ],
   "exclude": [
-    "./dist/**"
+    "dist/**"
   ]
 }
