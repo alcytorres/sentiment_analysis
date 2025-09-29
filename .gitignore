@@ -1,4 +1,33 @@
+# Virtual environments
 venv/
 venv*/
+
+# Python caches
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.pdb
+
+# macOS system files
+.DS_Store
+
+# Environment and config files
+.env
+.env.*
+
+# Build / dist
+*.egg
+*.egg-info/
+build/
+dist/
+
+# IDE settings
+.vscode/
+.idea/
+
+# Logs / databases
+*.log
+*.sqlite3
+*.db
+
