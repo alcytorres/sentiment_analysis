@@ -4,3 +4,8 @@ transformers==4.42.4
 torch==2.6.0
 spacy==3.7.5
 nltk==3.8.1
+langchain==0.2.0  # NEW: For RAG workflows
+langchain-community==0.2.0  # NEW: LangChain integrations
+neo4j==5.24.0  # NEW: Neo4j driver
+sentence-transformers==3.0.1  # NEW: For local embeddings
+pypdf2==3.0.0  # NEW: For PDF parsing
