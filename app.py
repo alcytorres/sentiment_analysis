@@ -8,6 +8,15 @@ import spacy  # Lightweight library for Named Entity Recognition (NER) to identi
 import numpy as np
 from nltk.tokenize import sent_tokenize  # Splits text into sentences for contrast detection
 import nltk
+# NEW: Imports for LangChain, RAG, Neo4j, embeddings, PDF
+from langchain_community.document_loaders import PyPDFLoader  # NEW: Load PDFs
+from langchain.text_splitter import RecursiveCharacterTextSplitter  # NEW: Chunk text
+from langchain_community.embeddings import HuggingFaceEmbeddings  # NEW: Embeddings model
+from langchain_community.vectorstores.neo4j_vector import Neo4jVector  # NEW: Neo4j vector store
+from langchain.chains import RetrievalQA  # NEW: RAG chain
+from langchain_community.llms.huggingface_pipeline import HuggingFacePipeline  # NEW: Local pipeline for LLM
+from neo4j import GraphDatabase  # NEW: Neo4j driver
+import os  # NEW: For file handling
 
 # Download NLTK data for sentence tokenization
 nltk.download('punkt')
@@ -19,6 +28,24 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(model_name)
 sentiment_pipeline = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
 nlp = spacy.load("en_core_web_sm")  # spaCy model for NER, identifies entities like "Tesla" or "Erythritol"
+
+# NEW: Neo4j connection details (update with your Neo4j credentials)
+NEO4J_URI = "neo4j://127.0.0.1:7687" # From Neo4j setup
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "AI-NEO4J-word4"
+driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))  # NEW: Connect to Neo4j
+
+# NEW: Embedding model for RAG
+embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")  # Local model
+
+# NEW: Local LLM for RAG using transformers pipeline
+llm_pipeline = pipeline(
+    "text-classification",
+    model="distilbert-base-uncased-finetuned-sst-2-english",
+    tokenizer=AutoTokenizer.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english"),
+    device=-1  # CPU, change to 0 for GPU if available
+)
+llm = HuggingFacePipeline(pipeline=llm_pipeline)  # NEW: Wrap pipeline for LangChain
 
 # Define templates for dynamic sentiment explanations
 templates = {
@@ -80,12 +107,10 @@ def analyze_sentiment(text):
     with torch.no_grad():
         outputs = model(**inputs, output_attentions=True)
     attention = outputs.attentions[-1]  # Last layer attentions
-
     # Get sentiment label and raw score
     result = sentiment_pipeline(text)[0]
     label = result['label'].capitalize()
     raw_score = result['score']  # FinBERT confidence score (0 to 1)
-
     # Map to intuitive labels and normalized scores
     if label == 'Positive':
         normalized_score = raw_score * 100  # Scale to 60-100%
@@ -102,7 +127,6 @@ def analyze_sentiment(text):
     else:
         normalized_score = 50 - (raw_score * 10)  # Neutral around 40-59%
         final_label = "Neutral"
-
     # Approximate pos, neu, neg for chart
     if final_label in ["Very Bullish", "Bullish"]:
         pos = normalized_score / 100
@@ -116,19 +140,16 @@ def analyze_sentiment(text):
         neu = normalized_score / 100
         pos = 0
         neg = 0
-
     # Extract entity, phrases, and contrast
     entity = extract_entity(text)
     key_phrases = extract_key_phrases(text, inputs['input_ids'][0], attention[0], top_k=3)
     contrast = detect_contrast(text)
-
     # Generate explanation
     explanation = templates[final_label].format(
         entity=entity,
         phrases=", ".join(f"'{phrase}'" for phrase in key_phrases),
         contrast=contrast
     )
-
     return {
         'label': final_label,
         'score': f"{normalized_score:.2f}%",
@@ -138,37 +159,73 @@ def analyze_sentiment(text):
         'neg': neg
     }
 
-# Define Flask route for web app
+# NEW: Function to index PDFs in Neo4j
+def index_pdfs(files):
+    documents = []
+    for file in files:
+        file_path = os.path.join("data", file.filename)
+        file.save(file_path)  # Save uploaded PDF
+        loader = PyPDFLoader(file_path)  # Load PDF
+        docs = loader.load()  # Extract text
+        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)  # Chunk text
+        chunks = splitter.split_documents(docs)  # Split into chunks
+        documents.extend(chunks)
+    # NEW: Store chunks in Neo4j as vector store
+    vector_store = Neo4jVector.from_documents(
+        documents,
+        embedding=embeddings,
+        url=NEO4J_URI,
+        username=NEO4J_USER,
+        password=NEO4J_PASSWORD,
+        index_name="tesla_earnings"  # Index name
+    )
+    return "Indexed 4 PDFs successfully."
+
+# NEW: Function to query RAG and get sentiment
+def query_rag(question):
+    # NEW: Set up RAG chain with LangChain
+    vector_store = Neo4jVector.from_existing_index(
+        embedding=embeddings,
+        url=NEO4J_URI,
+        username=NEO4J_USER,
+        password=NEO4J_PASSWORD,
+        index_name="tesla_earnings"
+    )
+    retriever = vector_store.as_retriever()  # Retrieve from Neo4j
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        chain_type="stuff",  # Simple chain
+        retriever=retriever,
+        return_source_documents=True  # For citations
+    )
+    response = qa_chain({"query": question})  # Run RAG
+    retrieved_docs = response['source_documents']  # Get evidence
+    # NEW: Score sentiment on retrieved chunks
+    sentiments = [analyze_sentiment(doc.page_content) for doc in retrieved_docs]  # Use existing sentiment function
+    avg_label = max(set([s['label'] for s in sentiments]), key=[s['label'] for s in sentiments].count)  # Simple majority label
+    # NEW: Generate explanation with citations
+    explanation = f"Sentiment: {avg_label}. Explanation: {response['result']}. Evidence: " + "; ".join([f"Page {doc.metadata['page']} in {doc.metadata['source']}" for doc in retrieved_docs])
+    return {
+        'question': question,
+        'answer': explanation
+    }
+
+# Update Flask route for upload and query
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    input_text = ""  # Initialize input_text for GET requests
     if request.method == 'POST':
-        input_text = request.form['text']
-        # Split only on three or more consecutive newlines
-        texts = re.split(r'\n\s*\n\s*\n\s*', input_text.strip())
-        results = [analyze_sentiment(t.strip()) for t in texts if t.strip()]
-        
-        # Aggregate for chart if batch
-        if len(results) > 1:
-            avg_pos = sum(r['pos'] for r in results) / len(results)
-            avg_neu = sum(r['neu'] for r in results) / len(results)
-            avg_neg = sum(r['neg'] for r in results) / len(results)
-            chart_data = json.dumps({
-                'labels': ['Positive', 'Neutral', 'Negative'],
-                'data': [avg_pos, avg_neu, avg_neg]
-            })
-        else:
-            chart_data = json.dumps({
-                'labels': ['Positive', 'Neutral', 'Negative'],
-                'data': [results[0]['pos'], results[0]['neu'], results[0]['neg']]
-            }) if results else None
-        
-        print(results)  # Debug: Print results to check pos, neu, neg values
-        # In index() function, before return render_template
-        print("Chart Data:", chart_data)
-        return render_template('index.html', results=results, chart_data=chart_data, input_text=input_text)
-    
-    return render_template('index.html', results=None, chart_data=None, input_text=input_text)
+        if 'files' in request.files:  # NEW: Handle PDF upload
+            files = request.files.getlist('files')
+            if len(files) == 4:
+                message = index_pdfs(files)
+                return render_template('index.html', message=message)
+            else:
+                return render_template('index.html', message="Upload exactly 4 PDFs.")
+        elif 'question' in request.form:  # NEW: Handle question
+            question = request.form['question']
+            result = query_rag(question)
+            return render_template('index.html', question=result['question'], answer=result['answer'])
+    return render_template('index.html')
 
 # Run the Flask app
 if __name__ == '__main__':

@@ -1,154 +1,44 @@
 <!DOCTYPE html>
-     <html lang="en">
-     <head>
-         <meta charset="UTF-8">
-         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-         <title>Sentiment Analysis Bot</title>
-         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
-         <!-- Use CDN for Chart.js 4.5.0 -->
-         <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js"></script>
-         <style>
-             body {
-                 padding: 2rem;
-                 background-color: #f8f9fa;
-             }
-             .container {
-                 max-width: 900px;
-             }
-             textarea.form-control {
-                 min-height: 200px;
-                 font-size: 1.1rem;
-             }
-             .result-table {
-                 width: 80%;
-                 margin: 0.5rem auto;
-             }
-             .result-table tr:hover {
-                 background-color: #e9ecef;
-             }
-             .scoring-table {
-                 width: 80%;
-                 margin: 1rem auto;
-             }
-             .very-bullish { color: #28a745; font-weight: bold; }
-             .bullish { color: #17a2b8; font-weight: bold; }
-             .neutral { color: #6c757d; font-weight: bold; }
-             .bearish { color: #dc3545; font-weight: bold; }
-             .very-bearish { color: #a71d2a; font-weight: bold; }
-             .results-header {
-                 margin-top: 2.5rem;
-                 margin-bottom: 0;
-             }
-         </style>
-     </head>
-     <body>
-         <div class="container">
-             <h1 class="text-center mb-4">Sentiment Analysis Bot</h1>
-             
-             <form method="post" class="mb-4">
-                 <div class="row justify-content-center">
-                     <div class="col-md-8">
-                         <textarea name="text" class="form-control" placeholder="Paste text here. For batch, separate by three newlines." required>{{ input_text | safe }}</textarea>
-                     </div>
-                 </div>
-                 <div class="text-center mt-3">
-                     <button type="submit" class="btn btn-primary btn-lg">Analyze</button>
-                 </div>
-             </form>
-             
-             {% if results %}
-                 <h2 class="text-center results-header">Results</h2>
-                 <table class="table table-bordered result-table">
-                     <thead class="table-light">
-                         <tr>
-                             <th>Label</th>
-                             <th>Score</th>
-                             <th>Explanation</th>
-                         </tr>
-                     </thead>
-                     <tbody>
-                         {% for result in results %}
-                             <tr>
-                                 <td class="{{ result.label.lower() | replace(' ', '-') }}">{{ result.label }}</td>
-                                 <td>{{ result.score }}</td>
-                                 <td>{{ result.explanation }}</td>
-                             </tr>
-                         {% endfor %}
-                     </tbody>
-                 </table>
-                 
-                 <div class="scoring-table">
-                     <h3 class="text-center mb-3">Scoring Explanation</h3>
-                     <table class="table table-bordered">
-                         <thead class="table-light">
-                             <tr>
-                                 <th>Label</th>
-                                 <th>Score Range</th>
-                                 <th>Description</th>
-                             </tr>
-                         </thead>
-                         <tbody>
-                             <tr>
-                                 <td class="very-bullish">Very Bullish</td>
-                                 <td>80-100%</td>
-                                 <td>Strongly positive sentiment, indicating high optimism (e.g., exceptional performance).</td>
-                             </tr>
-                             <tr>
-                                 <td class="bullish">Bullish</td>
-                                 <td>60-79%</td>
-                                 <td>Positive sentiment, suggesting a favorable outlook.</td>
-                             </tr>
-                             <tr>
-                                 <td class="neutral">Neutral</td>
-                                 <td>40-59%</td>
-                                 <td>Balanced sentiment, neither strongly positive nor negative.</td>
-                             </tr>
-                             <tr>
-                                 <td class="bearish">Bearish</td>
-                                 <td>20-39%</td>
-                                 <td>Negative sentiment, indicating challenges or concerns.</td>
-                             </tr>
-                             <tr>
-                                 <td class="very-bearish">Very Bearish</td>
-                                 <td>0-19%</td>
-                                 <td>Strongly negative sentiment, highlighting significant issues.</td>
-                             </tr>
-                         </tbody>
-                     </table>
-                 </div>
-                 
-                 <h2 class="text-center results-header">Sentiment Distribution</h2>
-                 <div class="result-table">
-                     <canvas id="sentimentChart" width="400" height="200"></canvas>
-                 </div>
-                 <script>
-                     document.addEventListener('DOMContentLoaded', function() {
-                         var ctx = document.getElementById('sentimentChart').getContext('2d');
-                         var chartData = {{ chart_data | safe }};
-                         if (ctx && chartData && chartData.labels && chartData.data) {
-                             new Chart(ctx, {
-                                 type: 'bar',
-                                 data: {
-                                     labels: chartData.labels,
-                                     datasets: [{
-                                         label: 'Sentiment Scores',
-                                         data: chartData.data,
-                                         backgroundColor: ['#28a745', '#6c757d', '#dc3545']
-                                     }]
-                                 },
-                                 options: {
-                                     scales: {
-                                         y: { beginAtZero: true, max: 1 }
-                                     }
-                                 }
-                             });
-                         } else {
-                             console.log("Chart initialization failed. Data:", chartData);
-                         }
-                     });
-                 </script>
-             {% endif %}
-         </div>
-         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
-     </body>
-     </html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tesla Earnings Sentiment Analyzer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding: 2rem; background-color: #f8f9fa; }
+        .container { max-width: 900px; }
+        .form-control { font-size: 1.1rem; }
+        .answer-box { margin-top: 2rem; padding: 1rem; background-color: #fff; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4">Tesla Earnings Sentiment Analyzer</h1>
+        <form method="post" enctype="multipart/form-data" class="mb-4">
+            <label class="form-label">Upload 4 Tesla Earnings PDFs:</label>
+            <input type="file" name="files" multiple accept=".pdf" required class="form-control">
+            <div class="text-center mt-3">
+                <button type="submit" class="btn btn-primary btn-lg">Index PDFs</button>
+            </div>
+        </form>
+        <form method="post" class="mb-4">
+            <label class="form-label">Ask a Question (e.g., What’s the sentiment toward Tesla's Optimus in Q2 earnings?):</label>
+            <input type="text" name="question" class="form-control" required>
+            <div class="text-center mt-3">
+                <button type="submit" class="btn btn-primary btn-lg">Ask</button>
+            </div>
+        </form>
+        {% if message %}
+            <p class="text-center">{{ message }}</p>
+        {% endif %}
+        {% if answer %}
+            <div class="answer-box">
+                <h2>Answer to: {{ question }}</h2>
+                <p>{{ answer }}</p>
+            </div>
+        {% endif %}
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

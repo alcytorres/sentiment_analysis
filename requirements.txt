@@ -9,3 +9,4 @@ langchain-community==0.2.0  # NEW: LangChain integrations
 neo4j==5.24.0  # NEW: Neo4j driver
 sentence-transformers==3.0.1  # NEW: For local embeddings
 pypdf2==3.0.0  # NEW: For PDF parsing
+huggingface_hub==0.24.7
