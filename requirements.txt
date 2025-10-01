@@ -1,12 +1,19 @@
+# Flask & core
 flask==3.0.3
-vaderSentiment==3.3.2
+
+# NLP / HF stack
 transformers==4.42.4
-torch==2.6.0
-spacy==3.7.5
-nltk==3.8.1
-langchain==0.2.0  # NEW: For RAG workflows
-langchain-community==0.2.0  # NEW: LangChain integrations
-neo4j==5.24.0  # NEW: Neo4j driver
-sentence-transformers==3.0.1  # NEW: For local embeddings
-pypdf2==3.0.0  # NEW: For PDF parsing
+torch==2.2.2          # NEW: widely available CPU wheel on macOS; stable with transformers
+sentence-transformers==3.0.1
 huggingface_hub==0.24.7
+
+# LangChain (modern splitters + community)
+langchain==0.2.5
+langchain-community==0.2.5
+langchain-text-splitters==0.2.2
+
+# Vector DB (Neo4j)
+neo4j==5.24.0
+
+# PDF parsing (no OCR deps)
+pypdf==4.3.0

@@ -1,232 +1,287 @@
-# Import required libraries for Flask app, sentiment analysis, and text processing
-from flask import Flask, render_template, request
-from transformers import pipeline, AutoModelForSequenceClassification, AutoTokenizer
-import json
-import re
-import torch
-import spacy  # Lightweight library for Named Entity Recognition (NER) to identify topics/companies
-import numpy as np
-from nltk.tokenize import sent_tokenize  # Splits text into sentences for contrast detection
-import nltk
-# NEW: Imports for LangChain, RAG, Neo4j, embeddings, PDF
-from langchain_community.document_loaders import PyPDFLoader  # NEW: Load PDFs
-from langchain.text_splitter import RecursiveCharacterTextSplitter  # NEW: Chunk text
-from langchain_community.embeddings import HuggingFaceEmbeddings  # NEW: Embeddings model
-from langchain_community.vectorstores.neo4j_vector import Neo4jVector  # NEW: Neo4j vector store
-from langchain.chains import RetrievalQA  # NEW: RAG chain
-from langchain_community.llms.huggingface_pipeline import HuggingFacePipeline  # NEW: Local pipeline for LLM
-from neo4j import GraphDatabase  # NEW: Neo4j driver
-import os  # NEW: For file handling
 
-# Download NLTK data for sentence tokenization
-nltk.download('punkt')
+# NEW: Hardened RAG + sentiment app for Tesla earnings PDFs
+# - Index 4 PDFs into Neo4j (vector index)
+# - Retrieve relevant chunks via LangChain + Neo4j
+# - Score sentiment with FinBERT (scalar + label)
+# - Write a short, cited answer with FLAN-T5 (local, CPU)
+# - No OCR/Unstructured deps; pure PyPDF
 
-# Initialize Flask app and models for sentiment analysis and NER
-app = Flask(__name__)
-model_name = "ProsusAI/finbert"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForSequenceClassification.from_pretrained(model_name)
-sentiment_pipeline = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
-nlp = spacy.load("en_core_web_sm")  # spaCy model for NER, identifies entities like "Tesla" or "Erythritol"
+# NEW: Add flash + PRG so the page shows a visible success/failure banner after indexing
+from flask import Flask, render_template, request, redirect, url_for, flash  # NEW
+from werkzeug.utils import secure_filename
+import os, logging
+from typing import List, Dict, Tuple
 
-# NEW: Neo4j connection details (update with your Neo4j credentials)
-NEO4J_URI = "neo4j://127.0.0.1:7687" # From Neo4j setup
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "AI-NEO4J-word4"
-driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))  # NEW: Connect to Neo4j
+# LangChain (stable)
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_huggingface import HuggingFaceEmbeddings            # FIX: no deprecation warning
+from langchain_community.vectorstores.neo4j_vector import Neo4jVector
 
-# NEW: Embedding model for RAG
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")  # Local model
-
-# NEW: Local LLM for RAG using transformers pipeline
-llm_pipeline = pipeline(
-    "text-classification",
-    model="distilbert-base-uncased-finetuned-sst-2-english",
-    tokenizer=AutoTokenizer.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english"),
-    device=-1  # CPU, change to 0 for GPU if available
+# Transformers (local models)
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,      # FinBERT
+    AutoModelForSeq2SeqLM,                   # FLAN-T5
+    pipeline,
 )
-llm = HuggingFacePipeline(pipeline=llm_pipeline)  # NEW: Wrap pipeline for LangChain
 
-# Define templates for dynamic sentiment explanations
-templates = {
-    "Very Bullish": "The article emphasizes {entity}'s exceptional performance and growth potential, with positive language like {phrases}{contrast}, driving a highly optimistic tone.",
-    "Bullish": "The article highlights {entity}'s solid performance, with terms like {phrases}{contrast}, indicating a positive outlook.",
-    "Neutral": "The article discusses {entity} with balanced language, including terms like {phrases}{contrast}, suggesting a neutral stance.",
-    "Bearish": "The article points to challenges for {entity}, with negative terms like {phrases}{contrast}, reflecting a bearish sentiment.",
-    "Very Bearish": "The article underscores significant issues for {entity}, with strong negative language like {phrases}{contrast}, indicating a highly bearish tone."
-}
+# ---------------------------
+# App & logging
+# ---------------------------
+logging.basicConfig(level=logging.INFO)
+app = Flask(__name__)
+app.secret_key = "dev-only-secret"  # NEW: needed for flash()
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # NEW: 50MB upload cap
+BASE_DIR = os.path.dirname(__file__)
+DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
 
-# Extract the main topic or company using spaCy NER
-# Prioritizes ORG (companies), then PROPN/NOUN (e.g., "Erythritol", "Bitcoin"), defaults to "the topic"
-def extract_entity(text):
-    doc = nlp(text)
-    # Try to find organizations first
-    entities = [ent.text for ent in doc.ents if ent.label_ == "ORG"]
-    if entities:
-        return entities[0]
-    # Fallback to proper nouns or nouns (e.g., "Erythritol", "Bitcoin")
-    candidates = [token.text for token in doc if token.pos_ in ["PROPN", "NOUN"] and len(token.text) > 2]
-    return candidates[0] if candidates else "the topic"
+# ---------------------------
+# Neo4j configuration
+# ---------------------------
+# Use bolt://localhost to avoid 127.0.1/403 quirks
+NEO4J_URL = os.getenv("NEO4J_URL", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "AI-NEO4J-word4")
+NEO4J_INDEX = "tesla_earnings"
 
-# Extract key phrases using FinBERT attention weights, with filtering
-# Identifies influential words/phrases, skips punctuation, prefers multi-word phrases
-def extract_key_phrases(text, tokens, attention, top_k=3):
-    attention = attention.mean(dim=1).mean(dim=0)  # Average attention across heads/layers
-    top_indices = attention.argsort(descending=True)[:top_k * 3]  # Get more candidates
-    key_phrases = []
-    # Convert tokens to words, filter out punctuation and special tokens
-    for idx in top_indices:
-        token = tokenizer.convert_ids_to_tokens([tokens[idx]])[0]
-        if token not in ['[CLS]', '[SEP]'] and token.isalnum():  # Skip special tokens and punctuation
-            key_phrases.append(token)
-    # Try to form multi-word phrases by combining adjacent tokens
-    words = text.lower().split()
-    phrases = []
-    for i in range(len(words) - 1):
-        phrase = " ".join(words[i:i+2])
-        if any(word in phrase for word in key_phrases):
-            phrases.append(phrase)
-    return phrases[:top_k] if phrases else key_phrases[:top_k] or ["performance", "market"]
+# ---------------------------
+# Embeddings (small, fast)
+# ---------------------------
+embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# Detect contrasting sentiments in sentences
-# Checks for mixed positive/negative sentiments to add context (e.g., "Tesla thrives, industry struggles")
-def detect_contrast(text):
-    sentences = sent_tokenize(text)
-    if len(sentences) < 2:
-        return ""
-    results = sentiment_pipeline(sentences)
-    labels = [r['label'].capitalize() for r in results]
-    if "Positive" in labels and "Negative" in labels:
-        return ", contrasted with challenges in the broader industry"
-    return ""
+# ---------------------------
+# FinBERT sentiment (local)
+# ---------------------------
+FINBERT = "ProsusAI/finbert"
+finbert_tokenizer = AutoTokenizer.from_pretrained(FINBERT)
+finbert_model = AutoModelForSequenceClassification.from_pretrained(FINBERT)
+finbert = pipeline("sentiment-analysis", model=finbert_model, tokenizer=finbert_tokenizer, device=-1)
 
-# Analyze sentiment and generate enhanced explanation with intuitive labels
-def analyze_sentiment(text):
-    # Tokenize for attention weights
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512, return_attention_mask=True)
-    with torch.no_grad():
-        outputs = model(**inputs, output_attentions=True)
-    attention = outputs.attentions[-1]  # Last layer attentions
-    # Get sentiment label and raw score
-    result = sentiment_pipeline(text)[0]
-    label = result['label'].capitalize()
-    raw_score = result['score']  # FinBERT confidence score (0 to 1)
-    # Map to intuitive labels and normalized scores
-    if label == 'Positive':
-        normalized_score = raw_score * 100  # Scale to 60-100%
-        if normalized_score >= 80:
-            final_label = "Very Bullish"
-        else:
-            final_label = "Bullish"
-    elif label == 'Negative':
-        normalized_score = (1 - raw_score) * 100  # Invert to 0-39%
-        if normalized_score <= 20:
-            final_label = "Very Bearish"
-        else:
-            final_label = "Bearish"
+def finbert_scalar(text: str) -> float:
+    """
+    NEW: Return a scalar in [-1, 1] where +1 is very bullish and -1 is very bearish.
+    """
+    try:
+        res = finbert(text[:512])[0]  # keep under 512 tokens/chars for safety
+        lbl, score = res["label"].lower(), float(res["score"])
+        if lbl == "positive":
+            return score              # + (0..1)
+        if lbl == "negative":
+            return -score             # - (0..-1)
+        return 0.0
+    except Exception as e:
+        logging.warning(f"FinBERT failed: {e}")
+        return 0.0
+
+def to_label_and_score(avg_scalar: float) -> Dict[str, str]:
+    """
+    Map scalar [-1,1] to label and 0-100% bullishness.
+    """
+    pct = (avg_scalar + 1.0) / 2.0 * 100.0
+    if pct >= 80:
+        lab = "Very Bullish"
+    elif pct >= 60:
+        lab = "Bullish"
+    elif pct >= 40:
+        lab = "Neutral"
+    elif pct >= 20:
+        lab = "Bearish"
     else:
-        normalized_score = 50 - (raw_score * 10)  # Neutral around 40-59%
-        final_label = "Neutral"
-    # Approximate pos, neu, neg for chart
-    if final_label in ["Very Bullish", "Bullish"]:
-        pos = normalized_score / 100
-        neg = 0
-        neu = 1 - pos
-    elif final_label in ["Very Bearish", "Bearish"]:
-        neg = (100 - normalized_score) / 100
-        pos = 0
-        neu = 1 - neg
-    else:
-        neu = normalized_score / 100
-        pos = 0
-        neg = 0
-    # Extract entity, phrases, and contrast
-    entity = extract_entity(text)
-    key_phrases = extract_key_phrases(text, inputs['input_ids'][0], attention[0], top_k=3)
-    contrast = detect_contrast(text)
-    # Generate explanation
-    explanation = templates[final_label].format(
-        entity=entity,
-        phrases=", ".join(f"'{phrase}'" for phrase in key_phrases),
-        contrast=contrast
+        lab = "Very Bearish"
+    return {"label": lab, "score_pct": f"{pct:.1f}"}
+
+# ---------------------------
+# Local LLM for answer writing (CPU-friendly)
+# ---------------------------
+GEN_MODEL = "google/flan-t5-small"  # tiny, instruction-following
+gen_tokenizer = AutoTokenizer.from_pretrained(GEN_MODEL)
+gen_model = AutoModelForSeq2SeqLM.from_pretrained(GEN_MODEL)
+gen = pipeline("text2text-generation", model=gen_model, tokenizer=gen_tokenizer, device=-1)
+
+def write_cited_answer(question: str, numbered_ctx: List[str]) -> str:
+    """
+    NEW: Ask FLAN-T5 to answer using ONLY provided snippets [1]..[k] and include citations.
+    """
+    if not numbered_ctx:
+        return "No relevant evidence was found in the indexed reports. Please re-index the PDFs and try again."
+    context_block = "\n".join([f"[{i+1}] {c}" for i, c in enumerate(numbered_ctx)])
+    prompt = (
+        "You are an equity research analyst. Using ONLY the context snippets below, "
+        "answer the user's question in 3-6 sentences. Cite evidence with [n] where n is the snippet number. "
+        "Do not invent facts. Be concise.\n\n"
+        f"Question: {question}\n\nContext:\n{context_block}\n\nAnswer:"
     )
-    return {
-        'label': final_label,
-        'score': f"{normalized_score:.2f}%",
-        'explanation': explanation,
-        'pos': pos,
-        'neu': neu,
-        'neg': neg
-    }
+    out = gen(prompt, max_new_tokens=220, do_sample=False)[0]["generated_text"].strip()
+    return out
 
-# NEW: Function to index PDFs in Neo4j
-def index_pdfs(files):
-    documents = []
-    for file in files:
-        file_path = os.path.join("data", file.filename)
-        file.save(file_path)  # Save uploaded PDF
-        loader = PyPDFLoader(file_path)  # Load PDF
-        docs = loader.load()  # Extract text
-        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)  # Chunk text
-        chunks = splitter.split_documents(docs)  # Split into chunks
-        documents.extend(chunks)
-    # NEW: Store chunks in Neo4j as vector store
-    vector_store = Neo4jVector.from_documents(
-        documents,
+# ---------------------------
+# Helpers
+# ---------------------------
+def split_docs(docs) -> List:
+    """
+    Split documents into RAG-sized chunks.
+    """
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=120,
+        separators=["\n\n", "\n", ". ", " "],
+    )
+    return splitter.split_documents(docs)
+
+def ensure_index_exists(documents: List) -> None:
+    """
+    Create/overwrite the Neo4j vector index from documents.
+    """
+    Neo4jVector.from_documents(
+        documents=documents,
         embedding=embeddings,
-        url=NEO4J_URI,
+        url=NEO4J_URL,
         username=NEO4J_USER,
         password=NEO4J_PASSWORD,
-        index_name="tesla_earnings"  # Index name
+        index_name=NEO4J_INDEX,
+        node_label="Chunk",
+        text_node_property="text",
+        embedding_node_property="embedding",
     )
+    logging.info("Neo4j vector index created/refreshed: %s", NEO4J_INDEX)
+
+def load_vectorstore_existing() -> Neo4jVector:
+    """
+    Open an existing index. Raise helpful error if missing.
+    """
+    try:
+        vs = Neo4jVector.from_existing_index(
+            embedding=embeddings,
+            url=NEO4J_URL,
+            username=NEO4J_USER,
+            password=NEO4J_PASSWORD,
+            index_name=NEO4J_INDEX,
+            text_node_property="text",
+            embedding_node_property="embedding",
+        )
+        return vs
+    except Exception as e:
+        raise RuntimeError(
+            f"Vector index '{NEO4J_INDEX}' not found in Neo4j. "
+            f"Upload & index the 4 PDFs first. Details: {e}"
+        )
+
+def summarize_docs_for_llm(docs: List) -> Tuple[List[str], List[Dict[str, str]]]:
+    """
+    Prepare short snippets for the LLM + a separate list for UI evidence.
+    """
+    snippets: List[str] = []
+    evidences: List[Dict[str, str]] = []
+    for d in docs:
+        text = (d.page_content or "").strip().replace("\n", " ")
+        short = text[:450]
+        src = os.path.basename(d.metadata.get("source", "")) or "unknown.pdf"
+        page = d.metadata.get("page", "?")
+        snippets.append(short)
+        evidences.append({"source": src, "page": str(page), "snippet": short})
+    return snippets, evidences
+
+# ---------------------------
+# Indexing flow
+# ---------------------------
+def index_pdfs(file_storages) -> str:
+    """
+    Save exactly 4 PDFs under ./data/, load → split → create Neo4j vector index.
+    """
+    if len(file_storages) != 4:
+        return "Please upload exactly 4 PDF files."
+
+    documents = []
+    for fs in file_storages:
+        if not fs or not fs.filename.lower().endswith(".pdf"):
+            return "Only PDF files are allowed."
+        fname = secure_filename(fs.filename)
+        path = os.path.join(DATA_DIR, fname)
+        fs.save(path)
+
+        loader = PyPDFLoader(path)     # simple, reliable PDF text loader
+        page_docs = loader.load()      # per-page docs with metadata (source, page)
+        documents.extend(split_docs(page_docs))
+
+    if not documents:
+        return "No text extracted from PDFs."
+
+    ensure_index_exists(documents)
     return "Indexed 4 PDFs successfully."
 
-# NEW: Function to query RAG and get sentiment
-def query_rag(question):
-    # NEW: Set up RAG chain with LangChain
-    vector_store = Neo4jVector.from_existing_index(
-        embedding=embeddings,
-        url=NEO4J_URI,
-        username=NEO4J_USER,
-        password=NEO4J_PASSWORD,
-        index_name="tesla_earnings"
-    )
-    retriever = vector_store.as_retriever()  # Retrieve from Neo4j
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",  # Simple chain
-        retriever=retriever,
-        return_source_documents=True  # For citations
-    )
-    response = qa_chain({"query": question})  # Run RAG
-    retrieved_docs = response['source_documents']  # Get evidence
-    # NEW: Score sentiment on retrieved chunks
-    sentiments = [analyze_sentiment(doc.page_content) for doc in retrieved_docs]  # Use existing sentiment function
-    avg_label = max(set([s['label'] for s in sentiments]), key=[s['label'] for s in sentiments].count)  # Simple majority label
-    # NEW: Generate explanation with citations
-    explanation = f"Sentiment: {avg_label}. Explanation: {response['result']}. Evidence: " + "; ".join([f"Page {doc.metadata['page']} in {doc.metadata['source']}" for doc in retrieved_docs])
-    return {
-        'question': question,
-        'answer': explanation
-    }
+# ---------------------------
+# Query flow (RAG + sentiment)
+# ---------------------------
+def query_rag(question: str) -> Dict[str, str]:
+    """
+    Retrieve top-k chunks, compute sentiment, and write a cited answer.
+    """
+    vs = load_vectorstore_existing()
+    # Retrieve the most relevant chunks
+    top_docs = vs.similarity_search(question, k=6)
+    if not top_docs:
+        return {"question": question, "answer": "No relevant evidence found. Try re-indexing the PDFs."}
 
-# Update Flask route for upload and query
-@app.route('/', methods=['GET', 'POST'])
+    # Sentiment per chunk and overall
+    scalars = [finbert_scalar(d.page_content) for d in top_docs]
+    avg_scalar = sum(scalars) / max(len(scalars), 1)
+    sent_meta = to_label_and_score(avg_scalar)
+
+    # Cited answer
+    snippets, evidences = summarize_docs_for_llm(top_docs)
+    answer = write_cited_answer(question, snippets)
+
+    # Prefix final sentiment & append human-readable citations
+    cites = "; ".join([f"{e['source']} p.{e['page']}" for e in evidences])
+    final = (
+        f"Overall sentiment: {sent_meta['label']} ({sent_meta['score_pct']}%).\n"
+        f"{answer}\n\nSources: {cites}"
+    )
+    return {"question": question, "answer": final}
+
+# ---------------------------
+# Routes
+# ---------------------------
+@app.route("/", methods=["GET", "POST"])
 def index():
-    if request.method == 'POST':
-        if 'files' in request.files:  # NEW: Handle PDF upload
-            files = request.files.getlist('files')
-            if len(files) == 4:
-                message = index_pdfs(files)
-                return render_template('index.html', message=message)
-            else:
-                return render_template('index.html', message="Upload exactly 4 PDFs.")
-        elif 'question' in request.form:  # NEW: Handle question
-            question = request.form['question']
-            result = query_rag(question)
-            return render_template('index.html', question=result['question'], answer=result['answer'])
-    return render_template('index.html')
+    if request.method == "POST":
+        # Upload/index
+        # NEW: Upload/index with PRG + flash
+        if "files" in request.files:
+            files = request.files.getlist("files")
+            try:
+                msg = index_pdfs(files)
+                flash(msg, "success")  # NEW
+            except Exception as e:
+                logging.exception("Indexing failed")
+                flash(f"Indexing failed: {e}", "danger")  # NEW
+            return redirect(url_for("index"))  # NEW: PRG
 
-# Run the Flask app
-if __name__ == '__main__':
-    app.run(debug=True)
+        # Ask a question
+        if "question" in request.form:
+            q = (request.form.get("question") or "").strip()
+            if not q:
+                return render_template("index.html", message="Please enter a question.")
+            try:
+                result = query_rag(q)
+                return render_template("index.html", question=result["question"], answer=result["answer"])
+            except Exception as e:
+                logging.exception("Query failed")
+                return render_template("index.html", message=f"Query failed: {e}")
+
+    # GET
+    return render_template("index.html")
+
+# Health endpoint (optional)
+@app.route("/health")
+def health():
+    return {"status": "ok"}
+
+# ---------------------------
+# Entrypoint
+# ---------------------------
+if __name__ == "__main__":
+    # Explicit host/port so you see the server start message
+    app.run(host="127.0.0.1", port=5000, debug=True)
