@@ -1,4 +1,3 @@
-
 # NEW: Hardened RAG + sentiment app for Tesla earnings PDFs
 # - Index 4 PDFs into Neo4j (vector index)
 # - Retrieve relevant chunks via LangChain + Neo4j
@@ -25,6 +24,10 @@ from transformers import (
     AutoModelForSeq2SeqLM,                   # FLAN-T5
     pipeline,
 )
+
+# NEW: for robust FinBERT scoring without >512 warnings
+import torch                                   # NEW
+import torch.nn.functional as F                # NEW
 
 # ---------------------------
 # App & logging
@@ -57,20 +60,27 @@ embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-
 FINBERT = "ProsusAI/finbert"
 finbert_tokenizer = AutoTokenizer.from_pretrained(FINBERT)
 finbert_model = AutoModelForSequenceClassification.from_pretrained(FINBERT)
+# Keep a simple pipeline around for any future use; main scoring uses the NEW function below
 finbert = pipeline("sentiment-analysis", model=finbert_model, tokenizer=finbert_tokenizer, device=-1)
 
 def finbert_scalar(text: str) -> float:
     """
     NEW: Return a scalar in [-1, 1] where +1 is very bullish and -1 is very bearish.
+         Truncates safely and maps FinBERT logits to a stable scalar.
     """
     try:
-        res = finbert(text[:512])[0]  # keep under 512 tokens/chars for safety
-        lbl, score = res["label"].lower(), float(res["score"])
-        if lbl == "positive":
-            return score              # + (0..1)
-        if lbl == "negative":
-            return -score             # - (0..-1)
-        return 0.0
+        enc = finbert_tokenizer(
+            text,
+            truncation=True,       # NEW
+            max_length=512,        # NEW
+            return_tensors="pt"    # NEW
+        )
+        with torch.no_grad():      # NEW
+            out = finbert_model(**enc)
+            probs = F.softmax(out.logits[0], dim=-1).tolist()  # NEW
+        # FinBERT label order: ['negative', 'neutral', 'positive']
+        neg, neu, pos = probs
+        return float(pos - neg)    # NEW: map to [-1, 1]
     except Exception as e:
         logging.warning(f"FinBERT failed: {e}")
         return 0.0
@@ -95,7 +105,9 @@ def to_label_and_score(avg_scalar: float) -> Dict[str, str]:
 # ---------------------------
 # Local LLM for answer writing (CPU-friendly)
 # ---------------------------
-GEN_MODEL = "google/flan-t5-small"  # tiny, instruction-following
+# GEN_MODEL = "google/flan-t5-small"  # tiny, instruction-following
+# NEW: use base for better instruction following and paragraph writing
+GEN_MODEL = "google/flan-t5-base"  # NEW
 gen_tokenizer = AutoTokenizer.from_pretrained(GEN_MODEL)
 gen_model = AutoModelForSeq2SeqLM.from_pretrained(GEN_MODEL)
 gen = pipeline("text2text-generation", model=gen_model, tokenizer=gen_tokenizer, device=-1)
@@ -103,17 +115,32 @@ gen = pipeline("text2text-generation", model=gen_model, tokenizer=gen_tokenizer,
 def write_cited_answer(question: str, numbered_ctx: List[str]) -> str:
     """
     NEW: Ask FLAN-T5 to answer using ONLY provided snippets [1]..[k] and include citations.
+         Trim context and force multi-sentence decoding so we don’t get a one-word answer.
     """
     if not numbered_ctx:
         return "No relevant evidence was found in the indexed reports. Please re-index the PDFs and try again."
-    context_block = "\n".join([f"[{i+1}] {c}" for i, c in enumerate(numbered_ctx)])
+
+    # Keep context tight so the model attends well
+    trimmed = [c[:350] for c in numbered_ctx[:3]]
+    context_block = "\n".join([f"[{i+1}] {c}" for i, c in enumerate(trimmed)])
+
     prompt = (
         "You are an equity research analyst. Using ONLY the context snippets below, "
-        "answer the user's question in 3-6 sentences. Cite evidence with [n] where n is the snippet number. "
-        "Do not invent facts. Be concise.\n\n"
+        "write a 3–6 sentence answer. Cite evidence with [n] where n is the snippet number. "
+        "Do not invent facts. Do not answer with a single word; write full sentences. Be concise but complete.\n\n"
         f"Question: {question}\n\nContext:\n{context_block}\n\nAnswer:"
     )
-    out = gen(prompt, max_new_tokens=220, do_sample=False)[0]["generated_text"].strip()
+
+    # NOTE: removed return_full_text (not supported for text2text-generation)
+    out = gen(
+        prompt,
+        max_new_tokens=220,
+        min_new_tokens=60,
+        num_beams=4,
+        do_sample=False,
+        clean_up_tokenization_spaces=True,
+    )[0]["generated_text"].strip()
+
     return out
 
 # ---------------------------
@@ -214,32 +241,48 @@ def index_pdfs(file_storages) -> str:
 # ---------------------------
 # Query flow (RAG + sentiment)
 # ---------------------------
-def query_rag(question: str) -> Dict[str, str]:
+def query_rag(question: str):
     """
-    Retrieve top-k chunks, compute sentiment, and write a cited answer.
+    Retrieve relevant chunks, write a cited answer with FLAN-T5, and append sentiment + sources.
     """
+    # Load existing index (raises a helpful error if missing)
     vs = load_vectorstore_existing()
-    # Retrieve the most relevant chunks
-    top_docs = vs.similarity_search(question, k=6)
-    if not top_docs:
-        return {"question": question, "answer": "No relevant evidence found. Try re-indexing the PDFs."}
+    retriever = vs.as_retriever(search_kwargs={"k": 5})
 
-    # Sentiment per chunk and overall
-    scalars = [finbert_scalar(d.page_content) for d in top_docs]
+    # 1) Retrieve
+    # docs = retriever.get_relevant_documents(question)  # deprecated
+    docs = retriever.invoke(question)  # NEW: modern API, same outcome (List[Document])
+
+    if not docs:
+        return {
+            "question": question,
+            "answer": "I couldn't find relevant context in the indexed PDFs. Try re-indexing or asking a broader question."
+        }
+
+    # 2) Prep snippets for LLM + evidence for UI
+    snippets, evidences = summarize_docs_for_llm(docs)  # returns short strings + [{source,page,snippet}]
+
+    # 3) Write cited answer using ONLY the retrieved context
+    cited_answer = write_cited_answer(question, snippets)
+
+    # 4) Sentiment on each retrieved chunk, then average → label + pct
+    scalars = [finbert_scalar(d.page_content) for d in docs]  # NEW: internal truncation handles length
     avg_scalar = sum(scalars) / max(len(scalars), 1)
-    sent_meta = to_label_and_score(avg_scalar)
+    sent = to_label_and_score(avg_scalar)  # {'label': ..., 'score_pct': 'xx.x'}
 
-    # Cited answer
-    snippets, evidences = summarize_docs_for_llm(top_docs)
-    answer = write_cited_answer(question, snippets)
-
-    # Prefix final sentiment & append human-readable citations
-    cites = "; ".join([f"{e['source']} p.{e['page']}" for e in evidences])
-    final = (
-        f"Overall sentiment: {sent_meta['label']} ({sent_meta['score_pct']}%).\n"
-        f"{answer}\n\nSources: {cites}"
+    # 5) Build sources string
+    srcs = "; ".join(
+        f"{os.path.basename(ev['source'])} p.{ev['page']}" for ev in evidences
     )
-    return {"question": question, "answer": final}
+
+    # 6) Final composed answer (first the written, cited answer)
+    final_text = (
+        f"{cited_answer}\n\n"
+        f"Overall sentiment: {sent['label']} ({sent['score_pct']}%).\n"
+        f"Sources: {srcs}"
+    )
+
+    return {"question": question, "answer": final_text}
 
 # ---------------------------
 # Routes
