@@ -5,13 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Tesla Earnings Sentiment Analyzer</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <style>
-    body { padding: 2rem; background-color: #f8f9fa; }
-    .container { max-width: 900px; }
-    .answer-box { margin-top: 2rem; padding: 1rem; background: #fff; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,.08); }
-  </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
+  <!-- Dark mode toggle button -->
+  <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">
+    <span id="theme-icon">☀️</span>
+  </button>
+
   <div class="container">
     <h1 class="text-center mb-4">Tesla Earnings Sentiment Analyzer</h1>
 
@@ -41,7 +42,7 @@
     </form>
 
     <form method="post" class="mb-4">
-      <label class="form-label">Ask a Question (e.g., What’s the sentiment toward Tesla's Optimus in Q2 earnings?):</label>
+      <label class="form-label">Ask a Question (e.g., What's the sentiment toward Tesla's Optimus in Q2 earnings?):</label>
       <input type="text" name="question" class="form-control" required>
       <div class="text-center mt-3">
         <button type="submit" class="btn btn-success btn-lg">Ask</button>
@@ -58,7 +59,35 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script>
-    // NEW: front-end spinner to make "Indexing..." obvious
+    // Dark mode toggle
+    const themeToggle = document.getElementById('theme-toggle');
+    const themeIcon = document.getElementById('theme-icon');
+    const html = document.documentElement;
+
+    // Load saved theme or default to dark
+    const currentTheme = localStorage.getItem('theme') || 'dark';
+    if (currentTheme === 'dark') {
+      html.setAttribute('data-theme', 'dark');
+      themeIcon.textContent = '☀️';
+    } else {
+      html.removeAttribute('data-theme');
+      themeIcon.textContent = '🌙';
+    }
+
+    themeToggle.addEventListener('click', () => {
+      const isDark = html.getAttribute('data-theme') === 'dark';
+      if (isDark) {
+        html.removeAttribute('data-theme');
+        themeIcon.textContent = '🌙';
+        localStorage.setItem('theme', 'light');
+      } else {
+        html.setAttribute('data-theme', 'dark');
+        themeIcon.textContent = '☀️';
+        localStorage.setItem('theme', 'dark');
+      }
+    });
+
+    // Front-end spinner for indexing
     const form = document.getElementById('index-form');
     const btn = document.getElementById('index-btn');
     const spin = document.getElementById('index-spin');
@@ -70,4 +99,3 @@
   </script>
 </body>
 </html>
-
