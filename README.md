@@ -1,11 +1,11 @@
 # README
 
-# Sentiment Analysis
+# Earnings Sentiment Analyzer
 
 # Description
-  This Sentiment Analysis AI Agent is a personalized tool designed to analyze the sentiment of financial articles or reviews, classifying them as Very Bullish, Bullish, Neutral, Bearish, or Very Bearish with concise explanations. It serves as a powerful resource for tracking market sentiment, allowing users to evaluate text inputs and visualize sentiment trends.
+  This Earnings Sentiment Analyzer is an AI-powered RAG (Retrieval-Augmented Generation) application designed to analyze company earnings reports and answer questions with sentiment insights. The app indexes multiple earnings PDFs into a Neo4j vector database, retrieves relevant context, and generates cited answers using local AI models.
 
-  Built with a clean and intuitive interface, the app helps users assess financial texts, identify key entities (e.g., companies), and evaluate investment decisions based on sentiment analysis. It’s more than just a tool—it’s a dynamic assistant for financial insight.
+  Built with a clean interface, featuring a dark mode, the app helps users quickly extract insights from earnings reports, understand sentiment trends, and get detailed answers with source citations. It combines the power of vector search, financial sentiment analysis, and generative AI to provide comprehensive earnings analysis.
 
 # Getting Started
   These instructions will get you a copy of the project up and running on your local machine.
@@ -14,14 +14,19 @@
   Before you begin, ensure you have met the following requirements:
     - Python version: 3.8+
     - pip (Python package manager)
+    - Neo4j database (running locally or accessible via connection string)
+    - Internet connection for initial model downloads
 
 # Technologies Used
   - Flask (Web Framework)
-  - Transformers (for FinBERT sentiment analysis)
-  - spaCy (for Named Entity Recognition)
-  - NLTK (for sentence tokenization)
-  - Chart.js (for sentiment distribution visualization)
-  - Bootstrap (for UI styling)
+  - Neo4j (Vector Database for RAG)
+  - LangChain (Document processing and vector store integration)
+  - Transformers (FinBERT for sentiment analysis, FLAN-T5 for answer generation)
+  - PyTorch (Model inference)
+  - Sentence Transformers (Embeddings)
+  - PyPDF (PDF text extraction)
+  - Bootstrap (UI framework)
+  - Custom CSS (styling)
 
 # Backend Installation
   1. Clone the repository:
@@ -40,31 +45,63 @@
   5. Install dependencies:
       pip install -r requirements.txt
 
+  6. Set up Neo4j:
+      - Install and start Neo4j database
+      - Update environment variables if needed (default: bolt://localhost:7687)
+      - Default credentials: neo4j / AI-NEO4J-word4 (change in app.py or via environment variables)
+
 # Starting the Flask Server
   From the sentiment_analysis directory, run:
-    python app.py
+    python3 app.py
+
+  The app will be available at http://127.0.0.1:5000
 
 # Usage
-  - Analyze Text: Paste a single article or multiple articles (separated by three newlines) into the text box and click "Analyze" to see sentiment results.
-  - View Results: Check the table for sentiment labels, scores, and explanations.
-  - Sentiment Distribution: View the bar chart to see the overall sentiment breakdown.
-  - Scoring Explanation: Refer to the table explaining score ranges and meanings.
+  1. Upload PDFs: Upload exactly 4 earnings report PDF files using the upload form. The app will extract text, split into chunks, and index them into Neo4j.
+
+  2. Ask Questions: Enter questions about the earnings reports (e.g., "What's the sentiment toward revenue growth in Q2 earnings?"). The app will:
+     - Retrieve relevant context from the indexed PDFs
+     - Generate a cited answer using FLAN-T5
+     - Analyze sentiment using FinBERT
+     - Display results with source references
+
+  3. View Results: Answers include:
+     - Detailed response with citations [1], [2], etc.
+     - Overall sentiment label (Very Bullish, Bullish, Neutral, Bearish, Very Bearish)
+     - Sentiment score percentage
+     - Source document references with page numbers
+
+  4. Theme Toggle: Use the toggle button in the top-right corner to switch between dark mode (default) and light mode.
 
 # Key Features
-  - Text Analysis: Classifies sentiment with FinBERT for financial nuance.
-  - Detailed Explanations: Provides entity-specific insights and key phrases.
-  - Sentiment Visualization: Displays a bar chart of sentiment distribution.
-  - Batch Processing: Handles multiple texts with three-newline separation.
+  - RAG Architecture: Vector-based retrieval from Neo4j for accurate, context-aware answers
+  - Financial Sentiment Analysis: FinBERT model provides nuanced sentiment classification for financial text
+  - Cited Answers: FLAN-T5 generates answers with source citations for transparency
+  - PDF Processing: Robust text extraction from earnings PDFs using PyPDF
+  - Premium UI: Modern, minimal design with dark mode support
+  - Local AI Models: Runs entirely on CPU with local models (no external API calls)
+  - Source Tracking: Every answer includes references to source documents and page numbers
 
 # Additional Configuration
-  - Ensure internet access for initial model downloads (e.g., FinBERT, ~400MB).
-  - No local storage; results are ephemeral.
+  - Environment Variables (optional):
+    - NEO4J_URL: Neo4j connection string (default: bolt://localhost:7687)
+    - NEO4J_USER: Neo4j username (default: neo4j)
+    - NEO4J_PASSWORD: Neo4j password (default: AI-NEO4J-word4)
+  
+  - Model Downloads: First run will download:
+    - FinBERT (~400MB)
+    - FLAN-T5-base (~250MB)
+    - Sentence transformer embeddings (~90MB)
+    - Ensure stable internet connection for initial setup
+
+  - File Storage: Uploaded PDFs are stored in the `data/` directory
 
 # License
   This project is open source and available under the MIT License.
 
 # Acknowledgments
-  - ProsusAI for FinBERT model.
-  - spaCy and NLTK communities for NLP tools.
-  - Chart.js and Bootstrap for visualization and styling support.
-  
+  - ProsusAI for FinBERT model
+  - Google for FLAN-T5 model
+  - LangChain community for RAG tools
+  - Neo4j for vector database support
+  - Sentence Transformers for embeddings

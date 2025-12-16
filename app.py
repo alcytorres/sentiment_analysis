@@ -1,4 +1,4 @@
-# NEW: Hardened RAG + sentiment app for Tesla earnings PDFs
+# NEW: Hardened RAG + sentiment app for earnings PDFs
 # - Index 4 PDFs into Neo4j (vector index)
 # - Retrieve relevant chunks via LangChain + Neo4j
 # - Score sentiment with FinBERT (scalar + label)
@@ -47,7 +47,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 NEO4J_URL = os.getenv("NEO4J_URL", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "AI-NEO4J-word4")
-NEO4J_INDEX = "tesla_earnings"
+NEO4J_INDEX = "earnings_reports"
 
 # ---------------------------
 # Embeddings (small, fast)
