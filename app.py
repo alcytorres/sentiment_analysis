@@ -1,12 +1,12 @@
-# NEW: Hardened RAG + sentiment app for earnings PDFs
+# Hardened RAG + sentiment app for earnings PDFs
 # - Index 4 PDFs into Neo4j (vector index)
 # - Retrieve relevant chunks via LangChain + Neo4j
 # - Score sentiment with FinBERT (scalar + label)
 # - Write a short, cited answer with FLAN-T5 (local, CPU)
 # - No OCR/Unstructured deps; pure PyPDF
 
-# NEW: Add flash + PRG so the page shows a visible success/failure banner after indexing
-from flask import Flask, render_template, request, redirect, url_for, flash  # NEW
+# Add flash + PRG so the page shows a visible success/failure banner after indexing
+from flask import Flask, render_template, request, redirect, url_for, flash
 from werkzeug.utils import secure_filename
 import os, logging
 from typing import List, Dict, Tuple
@@ -25,17 +25,17 @@ from transformers import (
     pipeline,
 )
 
-# NEW: for robust FinBERT scoring without >512 warnings
-import torch                                   # NEW
-import torch.nn.functional as F                # NEW
+# For robust FinBERT scoring without >512 warnings
+import torch                                   
+import torch.nn.functional as F                
 
 # ---------------------------
 # App & logging
 # ---------------------------
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
-app.secret_key = "dev-only-secret"  # NEW: needed for flash()
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # NEW: 50MB upload cap
+app.secret_key = "dev-only-secret"  # Needed for flash()
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB upload cap
 BASE_DIR = os.path.dirname(__file__)
 DATA_DIR = os.path.join(BASE_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -71,16 +71,16 @@ def finbert_scalar(text: str) -> float:
     try:
         enc = finbert_tokenizer(
             text,
-            truncation=True,       # NEW
-            max_length=512,        # NEW
-            return_tensors="pt"    # NEW
+            truncation=True,       
+            max_length=512,        
+            return_tensors="pt"   
         )
-        with torch.no_grad():      # NEW
+        with torch.no_grad():      
             out = finbert_model(**enc)
-            probs = F.softmax(out.logits[0], dim=-1).tolist()  # NEW
+            probs = F.softmax(out.logits[0], dim=-1).tolist() 
         # FinBERT label order: ['negative', 'neutral', 'positive']
         neg, neu, pos = probs
-        return float(pos - neg)    # NEW: map to [-1, 1]
+        return float(pos - neg)    # map to [-1, 1]
     except Exception as e:
         logging.warning(f"FinBERT failed: {e}")
         return 0.0
@@ -106,8 +106,8 @@ def to_label_and_score(avg_scalar: float) -> Dict[str, str]:
 # Local LLM for answer writing (CPU-friendly)
 # ---------------------------
 # GEN_MODEL = "google/flan-t5-small"  # tiny, instruction-following
-# NEW: use base for better instruction following and paragraph writing
-GEN_MODEL = "google/flan-t5-base"  # NEW
+# Use base for better instruction following and paragraph writing
+GEN_MODEL = "google/flan-t5-base"
 gen_tokenizer = AutoTokenizer.from_pretrained(GEN_MODEL)
 gen_model = AutoModelForSeq2SeqLM.from_pretrained(GEN_MODEL)
 gen = pipeline("text2text-generation", model=gen_model, tokenizer=gen_tokenizer, device=-1)
@@ -266,7 +266,7 @@ def query_rag(question: str):
     cited_answer = write_cited_answer(question, snippets)
 
     # 4) Sentiment on each retrieved chunk, then average → label + pct
-    scalars = [finbert_scalar(d.page_content) for d in docs]  # NEW: internal truncation handles length
+    scalars = [finbert_scalar(d.page_content) for d in docs]  # internal truncation handles length
     avg_scalar = sum(scalars) / max(len(scalars), 1)
     sent = to_label_and_score(avg_scalar)  # {'label': ..., 'score_pct': 'xx.x'}
 
@@ -291,16 +291,16 @@ def query_rag(question: str):
 def index():
     if request.method == "POST":
         # Upload/index
-        # NEW: Upload/index with PRG + flash
+        # Upload/index with PRG + flash
         if "files" in request.files:
             files = request.files.getlist("files")
             try:
                 msg = index_pdfs(files)
-                flash(msg, "success")  # NEW
+                flash(msg, "success")  
             except Exception as e:
                 logging.exception("Indexing failed")
-                flash(f"Indexing failed: {e}", "danger")  # NEW
-            return redirect(url_for("index"))  # NEW: PRG
+                flash(f"Indexing failed: {e}", "danger") 
+            return redirect(url_for("index"))  # PRG
 
         # Ask a question
         if "question" in request.form:
