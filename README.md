@@ -1,9 +1,9 @@
 # README
 
-# Earnings Sentiment Analyzer
+# Company Sentiment Analyzer
 
 # Description
-  This Earnings Sentiment Analyzer is an AI-powered RAG (Retrieval-Augmented Generation) application designed to analyze company earnings reports and answer questions with sentiment insights. The app indexes multiple earnings PDFs into a Neo4j vector database, retrieves relevant context, and generates cited answers using local AI models.
+  The Company Sentiment Analyzer is an AI-powered RAG (Retrieval-Augmented Generation) application designed to analyze company earnings reports and answer questions with sentiment insights. The app indexes multiple earnings PDFs into a Neo4j vector database, retrieves relevant context, and generates cited answers using local AI models.
 
   Built with a clean interface, featuring a dark mode, the app helps users quickly extract insights from earnings reports, understand sentiment trends, and get detailed answers with source citations. It combines the power of vector search, financial sentiment analysis, and generative AI to provide comprehensive earnings analysis.
 

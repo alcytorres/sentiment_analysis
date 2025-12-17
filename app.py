@@ -1,4 +1,4 @@
-# Hardened RAG + sentiment app for earnings PDFs
+# Hardened RAG + sentiment app for a company's earnings PDFs
 # - Index 4 PDFs into Neo4j (vector index)
 # - Retrieve relevant chunks via LangChain + Neo4j
 # - Score sentiment with FinBERT (scalar + label)
