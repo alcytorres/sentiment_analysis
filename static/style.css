@@ -398,6 +398,46 @@ html {
   scroll-behavior: smooth;
 }
 
+/* Textarea */
+textarea.form-control {
+  resize: vertical;
+  min-height: 120px;
+}
+
+/* Character counter */
+.char-count {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+/* Sample data form */
+.sample-form {
+  background: transparent;
+  border: 1px dashed var(--border);
+  box-shadow: none;
+  padding: 1.25rem;
+}
+
+.sample-form:hover {
+  box-shadow: none;
+  border-color: var(--text-secondary);
+}
+
+/* Outline button dark-mode fix */
+[data-theme="dark"] .btn-outline-secondary {
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] .btn-outline-secondary:hover {
+  background: var(--border);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .text-muted {
+  color: var(--text-secondary) !important;
+}
+
 /* Focus visible for accessibility */
 *:focus-visible {
   outline: 2px solid var(--primary);

@@ -1,21 +1,18 @@
-# README
-
-# Company Sentiment Analyzer
+# Financial Sentiment Analyzer
 
 # Description
-  The Company Sentiment Analyzer is an AI-powered RAG (Retrieval-Augmented Generation) application designed to analyze company earnings reports and answer questions with sentiment insights. The app indexes multiple earnings PDFs into a Neo4j vector database, retrieves relevant context, and generates cited answers using local AI models.
+  A RAG (Retrieval-Augmented Generation) web app that indexes user-supplied financial text into a Neo4j vector database, retrieves relevant context for questions, generates cited answers with a local LLM, and scores the sentiment (bullish / bearish) of the retrieved evidence using FinBERT.
 
-  Built with a clean interface, featuring a dark mode, the app helps users quickly extract insights from earnings reports, understand sentiment trends, and get detailed answers with source citations. It combines the power of vector search, financial sentiment analysis, and generative AI to provide comprehensive earnings analysis.
+  Paste financial articles, research notes, or earnings call snippets (or upload a .txt file), index them, then ask questions and get grounded answers with citations and sentiment analysis.
 
 # Getting Started
   These instructions will get you a copy of the project up and running on your local machine.
 
 # Prerequisites
-  Before you begin, ensure you have met the following requirements:
-    - Python version: 3.8+
-    - pip (Python package manager)
-    - Neo4j database (running locally or accessible via connection string)
-    - Internet connection for initial model downloads
+  - Python 3.8+
+  - pip (Python package manager)
+  - Neo4j database (running locally via Neo4j Desktop or accessible remotely)
+  - Internet connection for initial model downloads
 
 # Technologies Used
   - Flask (Web Framework)
@@ -24,11 +21,10 @@
   - Transformers (FinBERT for sentiment analysis, FLAN-T5 for answer generation)
   - PyTorch (Model inference)
   - Sentence Transformers (Embeddings)
-  - PyPDF (PDF text extraction)
   - Bootstrap (UI framework)
   - Custom CSS (styling)
 
-# Backend Installation
+# Installation
   1. Clone the repository:
       git clone https://github.com/alcytorres/sentiment_analysis.git
 
@@ -46,55 +42,57 @@
       pip install -r requirements.txt
 
   6. Set up Neo4j:
-      - Install and start Neo4j database
-      - Update environment variables if needed (default: bolt://localhost:7687)
-      - Default credentials: neo4j / AI-NEO4J-word4 (change in app.py or via environment variables)
+      - Install Neo4j Desktop and create a local instance
+      - Start the instance and note the bolt URI and password
+      - Set environment variables:
+          export NEO4J_PASSWORD="your-password"
+          export NEO4J_URL="bolt://localhost:7687"   # optional, this is the default
+          export NEO4J_USER="neo4j"                  # optional, this is the default
 
-# Starting the Flask Server
-  From the sentiment_analysis directory, run:
+# Starting the Server
+  From the project directory:
     python3 app.py
 
   The app will be available at http://127.0.0.1:5000
 
 # Usage
-  1. Upload PDFs: Upload exactly 4 earnings report PDF files using the upload form. The app will extract text, split into chunks, and index them into Neo4j.
+  1. Index Text:
+     - Paste financial text (articles, research notes, earnings call snippets) into the text area
+     - Optionally attach a .txt file
+     - Click "Index Text" to chunk, embed, and store in Neo4j
+     - Or click "Load Sample Data" to use the bundled sample financial texts
 
-  2. Ask Questions: Enter questions about the earnings reports (e.g., "What's the sentiment toward revenue growth in Q2 earnings?"). The app will:
-     - Retrieve relevant context from the indexed PDFs
-     - Generate a cited answer using FLAN-T5
-     - Analyze sentiment using FinBERT
-     - Display results with source references
+  2. Ask Questions:
+     - Type a question about the indexed text (e.g., "What is the sentiment on revenue growth?")
+     - The app retrieves the most relevant chunks, generates a cited answer, and scores sentiment
 
-  3. View Results: Answers include:
-     - Detailed response with citations [1], [2], etc.
+  3. View Results:
+     - Cited answer with [1], [2], etc. referencing the source chunks
      - Overall sentiment label (Very Bullish, Bullish, Neutral, Bearish, Very Bearish)
      - Sentiment score percentage
-     - Source document references with page numbers
+     - Source references
 
-  4. Theme Toggle: Use the toggle button in the top-right corner to switch between dark mode (default) and light mode.
+  4. Theme Toggle: Switch between dark mode (default) and light mode using the button in the top-right corner.
 
 # Key Features
-  - RAG Architecture: Vector-based retrieval from Neo4j for accurate, context-aware answers
-  - Financial Sentiment Analysis: FinBERT model provides nuanced sentiment classification for financial text
-  - Cited Answers: FLAN-T5 generates answers with source citations for transparency
-  - PDF Processing: Robust text extraction from earnings PDFs using PyPDF
-  - Premium UI: Modern, minimal design with dark mode support
-  - Local AI Models: Runs entirely on CPU with local models (no external API calls)
-  - Source Tracking: Every answer includes references to source documents and page numbers
+  - RAG Architecture: Vector-based retrieval from Neo4j for context-aware answers
+  - Financial Sentiment: FinBERT provides nuanced bullish/bearish classification
+  - Cited Answers: FLAN-T5 generates answers with source citations
+  - Local AI Models: Runs entirely on CPU with no external API calls
+  - Clean Overwrite: Each index action replaces the previous data for simplicity
+  - Sample Data: Built-in sample financial texts for quick demos
 
-# Additional Configuration
-  - Environment Variables (optional):
-    - NEO4J_URL: Neo4j connection string (default: bolt://localhost:7687)
-    - NEO4J_USER: Neo4j username (default: neo4j)
-    - NEO4J_PASSWORD: Neo4j password (default: AI-NEO4J-word4)
-  
-  - Model Downloads: First run will download:
-    - FinBERT (~400MB)
-    - FLAN-T5-base (~250MB)
-    - Sentence transformer embeddings (~90MB)
-    - Ensure stable internet connection for initial setup
+# Environment Variables
+  - NEO4J_PASSWORD (required): Your Neo4j instance password
+  - NEO4J_URL (optional): Connection string (default: bolt://localhost:7687)
+  - NEO4J_USER (optional): Neo4j username (default: neo4j)
 
-  - File Storage: Uploaded PDFs are stored in the `data/` directory
+# Model Downloads
+  First run will download:
+  - FinBERT (~400MB)
+  - FLAN-T5-base (~250MB)
+  - Sentence transformer embeddings (~90MB)
+  Ensure a stable internet connection for initial setup.
 
 # License
   This project is open source and available under the MIT License.

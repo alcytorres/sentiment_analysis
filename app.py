@@ -1,53 +1,51 @@
-# Hardened RAG + sentiment app for a company's earnings PDFs
-# - Index 4 PDFs into Neo4j (vector index)
+# RAG + sentiment app for user-supplied financial text
+# - Paste text or upload a .txt file → chunk → embed → Neo4j vector index
 # - Retrieve relevant chunks via LangChain + Neo4j
 # - Score sentiment with FinBERT (scalar + label)
 # - Write a short, cited answer with FLAN-T5 (local, CPU)
-# - No OCR/Unstructured deps; pure PyPDF
 
-# Add flash + PRG so the page shows a visible success/failure banner after indexing
 from flask import Flask, render_template, request, redirect, url_for, flash
 from werkzeug.utils import secure_filename
-import os, logging
+import os, logging, glob
 from typing import List, Dict, Tuple
 
-# LangChain (stable)
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings            # FIX: no deprecation warning
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores.neo4j_vector import Neo4jVector
+from neo4j import GraphDatabase
 
-# Transformers (local models)
 from transformers import (
     AutoTokenizer,
-    AutoModelForSequenceClassification,      # FinBERT
-    AutoModelForSeq2SeqLM,                   # FLAN-T5
+    AutoModelForSequenceClassification,
+    AutoModelForSeq2SeqLM,
     pipeline,
 )
 
-# For robust FinBERT scoring without >512 warnings
-import torch                                   
-import torch.nn.functional as F                
+import torch
+import torch.nn.functional as F
 
 # ---------------------------
 # App & logging
 # ---------------------------
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
-app.secret_key = "dev-only-secret"  # Needed for flash()
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB upload cap
-BASE_DIR = os.path.dirname(__file__)
-DATA_DIR = os.path.join(BASE_DIR, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+app.secret_key = "dev-only-secret"
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+
+MAX_CHARS = 50_000
 
 # ---------------------------
 # Neo4j configuration
 # ---------------------------
-# Use bolt://localhost to avoid 127.0.1/403 quirks
 NEO4J_URL = os.getenv("NEO4J_URL", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "AI-NEO4J-word4")
-NEO4J_INDEX = "earnings_reports"
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+if not NEO4J_PASSWORD:
+    raise RuntimeError(
+        "Set the NEO4J_PASSWORD environment variable before starting the app."
+    )
+NEO4J_INDEX = "financial_rag"
 
 # ---------------------------
 # Embeddings (small, fast)
@@ -60,35 +58,33 @@ embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-
 FINBERT = "ProsusAI/finbert"
 finbert_tokenizer = AutoTokenizer.from_pretrained(FINBERT)
 finbert_model = AutoModelForSequenceClassification.from_pretrained(FINBERT)
-# Keep a simple pipeline around for any future use; main scoring uses the NEW function below
-finbert = pipeline("sentiment-analysis", model=finbert_model, tokenizer=finbert_tokenizer, device=-1)
+finbert = pipeline(
+    "sentiment-analysis",
+    model=finbert_model,
+    tokenizer=finbert_tokenizer,
+    device=-1,
+)
+
 
 def finbert_scalar(text: str) -> float:
-    """
-    NEW: Return a scalar in [-1, 1] where +1 is very bullish and -1 is very bearish.
-         Truncates safely and maps FinBERT logits to a stable scalar.
-    """
+    """Return a scalar in [-1, 1] where +1 is very bullish and -1 is very bearish."""
     try:
         enc = finbert_tokenizer(
-            text,
-            truncation=True,       
-            max_length=512,        
-            return_tensors="pt"   
+            text, truncation=True, max_length=512, return_tensors="pt"
         )
-        with torch.no_grad():      
+        with torch.no_grad():
             out = finbert_model(**enc)
-            probs = F.softmax(out.logits[0], dim=-1).tolist() 
+            probs = F.softmax(out.logits[0], dim=-1).tolist()
         # FinBERT label order: ['negative', 'neutral', 'positive']
-        neg, neu, pos = probs
-        return float(pos - neg)    # map to [-1, 1]
+        neg, _neu, pos = probs
+        return float(pos - neg)
     except Exception as e:
-        logging.warning(f"FinBERT failed: {e}")
+        logging.warning("FinBERT failed: %s", e)
         return 0.0
 
+
 def to_label_and_score(avg_scalar: float) -> Dict[str, str]:
-    """
-    Map scalar [-1,1] to label and 0-100% bullishness.
-    """
+    """Map scalar [-1,1] to label and 0-100% bullishness."""
     pct = (avg_scalar + 1.0) / 2.0 * 100.0
     if pct >= 80:
         lab = "Very Bullish"
@@ -102,36 +98,37 @@ def to_label_and_score(avg_scalar: float) -> Dict[str, str]:
         lab = "Very Bearish"
     return {"label": lab, "score_pct": f"{pct:.1f}"}
 
+
 # ---------------------------
 # Local LLM for answer writing (CPU-friendly)
 # ---------------------------
-# GEN_MODEL = "google/flan-t5-small"  # tiny, instruction-following
-# Use base for better instruction following and paragraph writing
 GEN_MODEL = "google/flan-t5-base"
 gen_tokenizer = AutoTokenizer.from_pretrained(GEN_MODEL)
 gen_model = AutoModelForSeq2SeqLM.from_pretrained(GEN_MODEL)
-gen = pipeline("text2text-generation", model=gen_model, tokenizer=gen_tokenizer, device=-1)
+gen = pipeline(
+    "text2text-generation",
+    model=gen_model,
+    tokenizer=gen_tokenizer,
+    device=-1,
+)
+
 
 def write_cited_answer(question: str, numbered_ctx: List[str]) -> str:
-    """
-    NEW: Ask FLAN-T5 to answer using ONLY provided snippets [1]..[k] and include citations.
-         Trim context and force multi-sentence decoding so we don’t get a one-word answer.
-    """
+    """Ask FLAN-T5 to answer using ONLY provided snippets [1]..[k] and cite them."""
     if not numbered_ctx:
-        return "No relevant evidence was found in the indexed reports. Please re-index the PDFs and try again."
+        return "No relevant evidence was found. Please index some text and try again."
 
-    # Keep context tight so the model attends well
     trimmed = [c[:350] for c in numbered_ctx[:3]]
     context_block = "\n".join([f"[{i+1}] {c}" for i, c in enumerate(trimmed)])
 
     prompt = (
         "You are an equity research analyst. Using ONLY the context snippets below, "
-        "write a 3–6 sentence answer. Cite evidence with [n] where n is the snippet number. "
-        "Do not invent facts. Do not answer with a single word; write full sentences. Be concise but complete.\n\n"
+        "write a 3-6 sentence answer. Cite evidence with [n] where n is the snippet number. "
+        "Do not invent facts. Do not answer with a single word; write full sentences. "
+        "Be concise but complete.\n\n"
         f"Question: {question}\n\nContext:\n{context_block}\n\nAnswer:"
     )
 
-    # NOTE: removed return_full_text (not supported for text2text-generation)
     out = gen(
         prompt,
         max_new_tokens=220,
@@ -143,13 +140,12 @@ def write_cited_answer(question: str, numbered_ctx: List[str]) -> str:
 
     return out
 
+
 # ---------------------------
 # Helpers
 # ---------------------------
-def split_docs(docs) -> List:
-    """
-    Split documents into RAG-sized chunks.
-    """
+def split_docs(docs: List[Document]) -> List[Document]:
+    """Split documents into RAG-sized chunks."""
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
         chunk_overlap=120,
@@ -157,10 +153,18 @@ def split_docs(docs) -> List:
     )
     return splitter.split_documents(docs)
 
-def ensure_index_exists(documents: List) -> None:
-    """
-    Create/overwrite the Neo4j vector index from documents.
-    """
+
+def clear_existing_chunks() -> None:
+    """Delete all Chunk nodes so the next index run is a clean overwrite."""
+    driver = GraphDatabase.driver(NEO4J_URL, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    with driver.session() as session:
+        session.run("MATCH (n:Chunk) DETACH DELETE n")
+    driver.close()
+    logging.info("Cleared existing Chunk nodes from Neo4j.")
+
+
+def ensure_index_exists(documents: List[Document]) -> None:
+    """Create/overwrite the Neo4j vector index from documents."""
     Neo4jVector.from_documents(
         documents=documents,
         embedding=embeddings,
@@ -174,12 +178,11 @@ def ensure_index_exists(documents: List) -> None:
     )
     logging.info("Neo4j vector index created/refreshed: %s", NEO4J_INDEX)
 
+
 def load_vectorstore_existing() -> Neo4jVector:
-    """
-    Open an existing index. Raise helpful error if missing.
-    """
+    """Open an existing index. Raise helpful error if missing."""
     try:
-        vs = Neo4jVector.from_existing_index(
+        return Neo4jVector.from_existing_index(
             embedding=embeddings,
             url=NEO4J_URL,
             username=NEO4J_USER,
@@ -188,94 +191,111 @@ def load_vectorstore_existing() -> Neo4jVector:
             text_node_property="text",
             embedding_node_property="embedding",
         )
-        return vs
     except Exception as e:
         raise RuntimeError(
             f"Vector index '{NEO4J_INDEX}' not found in Neo4j. "
-            f"Upload & index the 4 PDFs first. Details: {e}"
+            f"Index some text first. Details: {e}"
         )
 
+
 def summarize_docs_for_llm(docs: List) -> Tuple[List[str], List[Dict[str, str]]]:
-    """
-    Prepare short snippets for the LLM + a separate list for UI evidence.
-    """
+    """Prepare short snippets for the LLM + a separate list for UI evidence."""
     snippets: List[str] = []
     evidences: List[Dict[str, str]] = []
     for d in docs:
         text = (d.page_content or "").strip().replace("\n", " ")
         short = text[:450]
-        src = os.path.basename(d.metadata.get("source", "")) or "unknown.pdf"
-        page = d.metadata.get("page", "?")
+        src = d.metadata.get("source", "unknown")
         snippets.append(short)
-        evidences.append({"source": src, "page": str(page), "snippet": short})
+        evidences.append({"source": src, "snippet": short})
     return snippets, evidences
+
+
+# ---------------------------
+# Sample data
+# ---------------------------
+SAMPLE_DIR = os.path.join(os.path.dirname(__file__), "samples")
+
+
+def load_sample_texts() -> List[Document]:
+    """Load bundled sample .txt files as Documents."""
+    docs: List[Document] = []
+    for path in sorted(glob.glob(os.path.join(SAMPLE_DIR, "*.txt"))):
+        with open(path, encoding="utf-8") as f:
+            text = f.read().strip()
+        if text:
+            docs.append(
+                Document(
+                    page_content=text,
+                    metadata={"source": os.path.basename(path)},
+                )
+            )
+    return docs
+
 
 # ---------------------------
 # Indexing flow
 # ---------------------------
-def index_pdfs(file_storages) -> str:
+def index_text(paste: str, file_text: str, file_name: str) -> str:
     """
-    Save exactly 4 PDFs under ./data/, load → split → create Neo4j vector index.
+    Build Documents from pasted text and/or uploaded .txt content,
+    split → embed → overwrite Neo4j vector index.
     """
-    if len(file_storages) != 4:
-        return "Please upload exactly 4 PDF files."
+    documents: List[Document] = []
 
-    documents = []
-    for fs in file_storages:
-        if not fs or not fs.filename.lower().endswith(".pdf"):
-            return "Only PDF files are allowed."
-        fname = secure_filename(fs.filename)
-        path = os.path.join(DATA_DIR, fname)
-        fs.save(path)
+    if paste.strip():
+        documents.append(
+            Document(page_content=paste.strip(), metadata={"source": "pasted text"})
+        )
 
-        loader = PyPDFLoader(path)     # simple, reliable PDF text loader
-        page_docs = loader.load()      # per-page docs with metadata (source, page)
-        documents.extend(split_docs(page_docs))
+    if file_text.strip():
+        documents.append(
+            Document(
+                page_content=file_text.strip(),
+                metadata={"source": file_name or "uploaded.txt"},
+            )
+        )
 
     if not documents:
-        return "No text extracted from PDFs."
+        return "Please paste some text or upload a .txt file."
 
-    ensure_index_exists(documents)
-    return "Indexed 4 PDFs successfully."
+    total_chars = sum(len(d.page_content) for d in documents)
+    if total_chars > MAX_CHARS:
+        return f"Text too long ({total_chars:,} chars). Maximum is {MAX_CHARS:,} characters."
+
+    chunks = split_docs(documents)
+    if not chunks:
+        return "No usable text found after splitting."
+
+    clear_existing_chunks()
+    ensure_index_exists(chunks)
+    return f"Indexed {len(chunks)} chunks from {len(documents)} source(s)."
+
 
 # ---------------------------
 # Query flow (RAG + sentiment)
 # ---------------------------
 def query_rag(question: str):
-    """
-    Retrieve relevant chunks, write a cited answer with FLAN-T5, and append sentiment + sources.
-    """
-    # Load existing index (raises a helpful error if missing)
+    """Retrieve relevant chunks, write a cited answer, and append sentiment + sources."""
     vs = load_vectorstore_existing()
     retriever = vs.as_retriever(search_kwargs={"k": 5})
-
-    # 1) Retrieve
-    # docs = retriever.get_relevant_documents(question)  # deprecated
-    docs = retriever.invoke(question)  # NEW: modern API, same outcome (List[Document])
+    docs = retriever.invoke(question)
 
     if not docs:
         return {
             "question": question,
-            "answer": "I couldn't find relevant context in the indexed PDFs. Try re-indexing or asking a broader question."
+            "answer": "No relevant context found. Try indexing more text or asking a broader question.",
         }
 
-    # 2) Prep snippets for LLM + evidence for UI
-    snippets, evidences = summarize_docs_for_llm(docs)  # returns short strings + [{source,page,snippet}]
-
-    # 3) Write cited answer using ONLY the retrieved context
+    snippets, evidences = summarize_docs_for_llm(docs)
     cited_answer = write_cited_answer(question, snippets)
 
-    # 4) Sentiment on each retrieved chunk, then average → label + pct
-    scalars = [finbert_scalar(d.page_content) for d in docs]  # internal truncation handles length
+    scalars = [finbert_scalar(d.page_content) for d in docs]
     avg_scalar = sum(scalars) / max(len(scalars), 1)
-    sent = to_label_and_score(avg_scalar)  # {'label': ..., 'score_pct': 'xx.x'}
+    sent = to_label_and_score(avg_scalar)
 
-    # 5) Build sources string
-    srcs = "; ".join(
-        f"{os.path.basename(ev['source'])} p.{ev['page']}" for ev in evidences
-    )
+    srcs = "; ".join(ev["source"] for ev in evidences)
 
-    # 6) Final composed answer (first the written, cited answer)
     final_text = (
         f"{cited_answer}\n\n"
         f"Overall sentiment: {sent['label']} ({sent['score_pct']}%).\n"
@@ -284,47 +304,82 @@ def query_rag(question: str):
 
     return {"question": question, "answer": final_text}
 
+
 # ---------------------------
 # Routes
 # ---------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
-        # Upload/index
-        # Upload/index with PRG + flash
-        if "files" in request.files:
-            files = request.files.getlist("files")
+        action = request.form.get("action", "")
+
+        if action == "index":
+            paste = request.form.get("corpus_text", "")
+            file_text = ""
+            file_name = ""
+            f = request.files.get("file")
+            if f and f.filename:
+                if not f.filename.lower().endswith(".txt"):
+                    flash("Only .txt files are accepted.", "danger")
+                    return redirect(url_for("index"))
+                try:
+                    file_text = f.read().decode("utf-8")
+                    file_name = secure_filename(f.filename)
+                except UnicodeDecodeError:
+                    flash("File must be valid UTF-8 text.", "danger")
+                    return redirect(url_for("index"))
             try:
-                msg = index_pdfs(files)
-                flash(msg, "success")  
+                msg = index_text(paste, file_text, file_name)
+                flash(msg, "success")
             except Exception as e:
                 logging.exception("Indexing failed")
-                flash(f"Indexing failed: {e}", "danger") 
-            return redirect(url_for("index"))  # PRG
+                flash(f"Indexing failed: {e}", "danger")
+            return redirect(url_for("index"))
 
-        # Ask a question
+        if action == "load_sample":
+            try:
+                sample_docs = load_sample_texts()
+                if not sample_docs:
+                    flash("No sample files found in samples/ directory.", "danger")
+                    return redirect(url_for("index"))
+                chunks = split_docs(sample_docs)
+                clear_existing_chunks()
+                ensure_index_exists(chunks)
+                flash(
+                    f"Loaded sample data: {len(chunks)} chunks from "
+                    f"{len(sample_docs)} file(s).",
+                    "success",
+                )
+            except Exception as e:
+                logging.exception("Loading sample data failed")
+                flash(f"Sample loading failed: {e}", "danger")
+            return redirect(url_for("index"))
+
         if "question" in request.form:
             q = (request.form.get("question") or "").strip()
             if not q:
                 return render_template("index.html", message="Please enter a question.")
             try:
                 result = query_rag(q)
-                return render_template("index.html", question=result["question"], answer=result["answer"])
+                return render_template(
+                    "index.html",
+                    question=result["question"],
+                    answer=result["answer"],
+                )
             except Exception as e:
                 logging.exception("Query failed")
                 return render_template("index.html", message=f"Query failed: {e}")
 
-    # GET
     return render_template("index.html")
 
-# Health endpoint (optional)
+
 @app.route("/health")
 def health():
     return {"status": "ok"}
+
 
 # ---------------------------
 # Entrypoint
 # ---------------------------
 if __name__ == "__main__":
-    # Explicit host/port so you see the server start message
     app.run(host="127.0.0.1", port=5000, debug=True)
