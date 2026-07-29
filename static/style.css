@@ -293,6 +293,136 @@ form:hover {
   border: none;
 }
 
+/* Question hint */
+.form-hint {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-top: 0.5rem;
+}
+
+/* Sentiment summary */
+.sentiment-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 0 1.25rem;
+}
+
+.sentiment-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.sentiment-sources {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.chip {
+  display: inline-block;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.chip-sm {
+  padding: 0.15rem 0.55rem;
+  font-size: 0.75rem;
+}
+
+.chip-bullish {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--success-hover);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.chip-bearish {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.chip-neutral {
+  background: rgba(100, 116, 139, 0.12);
+  color: var(--text-secondary);
+  border-color: rgba(100, 116, 139, 0.35);
+}
+
+[data-theme="dark"] .chip-bullish {
+  color: var(--success);
+}
+
+[data-theme="dark"] .chip-bearish {
+  color: #f87171;
+}
+
+/* Evidence cards */
+.evidence-intro {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+}
+
+.evidence-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.evidence-card:last-child {
+  margin-bottom: 0;
+}
+
+.evidence-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.citation {
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.evidence-meta {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.evidence-text {
+  font-size: 0.92rem;
+  line-height: 1.75;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+/* Empty state */
+.no-evidence {
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1.5rem;
+  margin-top: 1rem;
+  font-size: 0.92rem;
+  color: var(--text-secondary);
+}
+
+.no-evidence strong {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: var(--text-primary);
+}
+
 /* Alerts */
 .alert {
   border-radius: var(--radius-sm);

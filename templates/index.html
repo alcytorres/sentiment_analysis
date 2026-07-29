@@ -28,6 +28,10 @@
       {% endif %}
     {% endwith %}
 
+    {% if message %}
+      <div class="alert alert-danger" role="alert">{{ message }}</div>
+    {% endif %}
+
     <!-- Index form -->
     <form method="post" enctype="multipart/form-data" class="mb-4" id="index-form">
       <input type="hidden" name="action" value="index">
@@ -60,15 +64,48 @@
       <label class="form-label">Ask a question about the indexed text:</label>
       <input type="text" name="question" class="form-control" required
              placeholder="e.g., What is the overall sentiment on revenue growth?">
+      <div class="form-hint">Returns the passages that best match your question, plus their sentiment.</div>
       <div class="text-center mt-3">
         <button type="submit" class="btn btn-success btn-lg">Ask</button>
       </div>
     </form>
 
-    {% if answer %}
+    {% if result %}
       <div class="answer-box">
-        <h2>Answer to: {{ question }}</h2>
-        <pre class="mb-0" style="white-space: pre-wrap;">{{ answer }}</pre>
+        <h2>{{ result.question }}</h2>
+
+        {% if result.evidence %}
+          <div class="sentiment-summary">
+            <span class="sentiment-label">Overall sentiment</span>
+            <span class="chip chip-{{ result.sentiment.tone }}">
+              {{ result.sentiment.label }} · {{ result.sentiment.score_pct }}% bullish
+            </span>
+            <span class="sentiment-sources">Sources: {{ result.sentiment.sources }}</span>
+          </div>
+
+          <p class="evidence-intro">
+            Top matching evidence from the indexed text:
+          </p>
+
+          {% for e in result.evidence %}
+            <div class="evidence-card">
+              <div class="evidence-head">
+                <span class="citation">[{{ loop.index }}]</span>
+                <span class="evidence-meta">{{ e.source }} · {{ e.match_pct }}% match</span>
+                <span class="chip chip-sm chip-{{ e.tone }}">{{ e.label }}</span>
+              </div>
+              <p class="evidence-text">{{ e.text }}</p>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="no-evidence">
+            <strong>No relevant evidence found in the indexed text.</strong>
+            <p class="mb-0">
+              Nothing passed the similarity threshold, so no snippets or sentiment
+              are shown. Try rephrasing the question or indexing text that covers it.
+            </p>
+          </div>
+        {% endif %}
       </div>
     {% endif %}
   </div>

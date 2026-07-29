@@ -1,9 +1,9 @@
 # Financial Sentiment Analyzer
 
 # Description
-  A RAG (Retrieval-Augmented Generation) web app that indexes user-supplied financial text into a Neo4j vector database, retrieves relevant context for questions, generates cited answers with a local LLM, and scores the sentiment (bullish / bearish) of the retrieved evidence using FinBERT.
+  A RAG (Retrieval-Augmented Generation) web app that indexes user-supplied financial text into a Neo4j vector database, retrieves the passages that best answer a question, and scores the sentiment (bullish / bearish) of that evidence using FinBERT.
 
-  Paste financial articles, research notes, or earnings call snippets (or upload a .txt file), index them, then ask questions and get grounded answers with citations and sentiment analysis.
+  Paste financial articles, research notes, or earnings call snippets (or upload a .txt file), index them, then ask questions. Answers are the source passages themselves, numbered and cited, so nothing is paraphrased or invented. If no passage matches the question closely enough, the app says so instead of citing unrelated text.
 
 # Getting Started
   These instructions will get you a copy of the project up and running on your local machine.
@@ -18,7 +18,7 @@
   - Flask (Web Framework)
   - Neo4j (Vector Database for RAG)
   - LangChain (Document processing and vector store integration)
-  - Transformers (FinBERT for sentiment analysis, FLAN-T5 for answer generation)
+  - Transformers (FinBERT for financial sentiment analysis)
   - PyTorch (Model inference)
   - Sentence Transformers (Embeddings)
   - Bootstrap (UI framework)
@@ -64,20 +64,21 @@
 
   2. Ask Questions:
      - Type a question about the indexed text (e.g., "What is the sentiment on revenue growth?")
-     - The app retrieves the most relevant chunks, generates a cited answer, and scores sentiment
+     - The app retrieves the closest-matching passages and scores their sentiment
 
   3. View Results:
-     - Cited answer with [1], [2], etc. referencing the source chunks
-     - Overall sentiment label (Very Bullish, Bullish, Neutral, Bearish, Very Bearish)
+     - Top matching passages, numbered [1], [2], [3], each with its source and match percentage
+     - Overall sentiment label (Very Bullish, Bullish, Neutral, Mixed, Bearish, Very Bearish)
      - Sentiment score percentage
-     - Source references
+     - "No relevant evidence found" when the question is not covered by the indexed text
 
   4. Theme Toggle: Switch between dark mode (default) and light mode using the button in the top-right corner.
 
 # Key Features
   - RAG Architecture: Vector-based retrieval from Neo4j for context-aware answers
-  - Financial Sentiment: FinBERT provides nuanced bullish/bearish classification
-  - Cited Answers: FLAN-T5 generates answers with source citations
+  - Financial Sentiment: FinBERT provides nuanced bullish/bearish classification, per passage and overall
+  - Cited Evidence: Answers are the retrieved passages themselves, numbered and attributed to their source
+  - Relevance Gate: Off-topic questions return "no relevant evidence" instead of unrelated citations
   - Local AI Models: Runs entirely on CPU with no external API calls
   - Clean Overwrite: Each index action replaces the previous data for simplicity
   - Sample Data: Built-in sample financial texts for quick demos
@@ -86,11 +87,11 @@
   - NEO4J_PASSWORD (required): Your Neo4j instance password
   - NEO4J_URL (optional): Connection string (default: bolt://localhost:7687)
   - NEO4J_USER (optional): Neo4j username (default: neo4j)
+  - RELEVANCE_MIN (optional): Similarity floor for showing evidence, 0-1 (default: 0.30)
 
 # Model Downloads
   First run will download:
   - FinBERT (~400MB)
-  - FLAN-T5-base (~250MB)
   - Sentence transformer embeddings (~90MB)
   Ensure a stable internet connection for initial setup.
 
@@ -99,7 +100,6 @@
 
 # Acknowledgments
   - ProsusAI for FinBERT model
-  - Google for FLAN-T5 model
   - LangChain community for RAG tools
   - Neo4j for vector database support
   - Sentence Transformers for embeddings

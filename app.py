@@ -1,8 +1,8 @@
 # RAG + sentiment app for user-supplied financial text
 # - Paste text or upload a .txt file → chunk → embed → Neo4j vector index
-# - Retrieve relevant chunks via LangChain + Neo4j
-# - Score sentiment with FinBERT (scalar + label)
-# - Write a short, cited answer with FLAN-T5 (local, CPU)
+# - Retrieve relevant chunks via LangChain + Neo4j (with a similarity floor)
+# - Show the retrieved evidence itself, numbered and cited
+# - Score sentiment with FinBERT (per snippet + overall)
 
 from flask import Flask, render_template, request, redirect, url_for, flash
 from werkzeug.utils import secure_filename
@@ -15,12 +15,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores.neo4j_vector import Neo4jVector
 from neo4j import GraphDatabase
 
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
-    AutoModelForSeq2SeqLM,
-    pipeline,
-)
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 import torch
 import torch.nn.functional as F
@@ -34,6 +29,14 @@ app.secret_key = "dev-only-secret"
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
 
 MAX_CHARS = 50_000
+
+# Retrieval tuning
+TOP_K = 10  # candidates pulled from the vector index
+SHOW_K = 3  # snippets shown as the answer
+# Similarity floor (0-1) on Neo4j's cosine score. Below this a question is
+# treated as unrelated to the indexed text, so no evidence and no sentiment are
+# shown. On-topic questions score ~0.67+; off-topic ones sit below ~0.6.
+RELEVANCE_MIN = float(os.getenv("RELEVANCE_MIN", "0.65"))
 
 # ---------------------------
 # Neo4j configuration
@@ -58,12 +61,12 @@ embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-
 FINBERT = "ProsusAI/finbert"
 finbert_tokenizer = AutoTokenizer.from_pretrained(FINBERT)
 finbert_model = AutoModelForSequenceClassification.from_pretrained(FINBERT)
-finbert = pipeline(
-    "sentiment-analysis",
-    model=finbert_model,
-    tokenizer=finbert_tokenizer,
-    device=-1,
-)
+
+# Read the class order from the model config instead of assuming it. FinBERT
+# outputs [positive, negative, neutral], which is not the usual ordering.
+LABEL_INDEX = {
+    label.lower(): idx for idx, label in finbert_model.config.id2label.items()
+}
 
 
 def finbert_scalar(text: str) -> float:
@@ -75,70 +78,26 @@ def finbert_scalar(text: str) -> float:
         with torch.no_grad():
             out = finbert_model(**enc)
             probs = F.softmax(out.logits[0], dim=-1).tolist()
-        # FinBERT label order: ['negative', 'neutral', 'positive']
-        neg, _neu, pos = probs
-        return float(pos - neg)
+        return float(probs[LABEL_INDEX["positive"]] - probs[LABEL_INDEX["negative"]])
     except Exception as e:
         logging.warning("FinBERT failed: %s", e)
         return 0.0
 
 
 def to_label_and_score(avg_scalar: float) -> Dict[str, str]:
-    """Map scalar [-1,1] to label and 0-100% bullishness."""
+    """Map scalar [-1,1] to label, 0-100% bullishness, and a UI tone class."""
     pct = (avg_scalar + 1.0) / 2.0 * 100.0
     if pct >= 80:
-        lab = "Very Bullish"
+        lab, tone = "Very Bullish", "bullish"
     elif pct >= 60:
-        lab = "Bullish"
+        lab, tone = "Bullish", "bullish"
     elif pct >= 40:
-        lab = "Neutral"
+        lab, tone = "Neutral", "neutral"
     elif pct >= 20:
-        lab = "Bearish"
+        lab, tone = "Bearish", "bearish"
     else:
-        lab = "Very Bearish"
-    return {"label": lab, "score_pct": f"{pct:.1f}"}
-
-
-# ---------------------------
-# Local LLM for answer writing (CPU-friendly)
-# ---------------------------
-GEN_MODEL = "google/flan-t5-base"
-gen_tokenizer = AutoTokenizer.from_pretrained(GEN_MODEL)
-gen_model = AutoModelForSeq2SeqLM.from_pretrained(GEN_MODEL)
-gen = pipeline(
-    "text2text-generation",
-    model=gen_model,
-    tokenizer=gen_tokenizer,
-    device=-1,
-)
-
-
-def write_cited_answer(question: str, numbered_ctx: List[str]) -> str:
-    """Ask FLAN-T5 to answer using ONLY provided snippets [1]..[k] and cite them."""
-    if not numbered_ctx:
-        return "No relevant evidence was found. Please index some text and try again."
-
-    trimmed = [c[:350] for c in numbered_ctx[:3]]
-    context_block = "\n".join([f"[{i+1}] {c}" for i, c in enumerate(trimmed)])
-
-    prompt = (
-        "You are an equity research analyst. Using ONLY the context snippets below, "
-        "write a 3-6 sentence answer. Cite evidence with [n] where n is the snippet number. "
-        "Do not invent facts. Do not answer with a single word; write full sentences. "
-        "Be concise but complete.\n\n"
-        f"Question: {question}\n\nContext:\n{context_block}\n\nAnswer:"
-    )
-
-    out = gen(
-        prompt,
-        max_new_tokens=220,
-        min_new_tokens=60,
-        num_beams=4,
-        do_sample=False,
-        clean_up_tokenization_spaces=True,
-    )[0]["generated_text"].strip()
-
-    return out
+        lab, tone = "Very Bearish", "bearish"
+    return {"label": lab, "score_pct": f"{pct:.1f}", "tone": tone}
 
 
 # ---------------------------
@@ -146,9 +105,11 @@ def write_cited_answer(question: str, numbered_ctx: List[str]) -> str:
 # ---------------------------
 def split_docs(docs: List[Document]) -> List[Document]:
     """Split documents into RAG-sized chunks."""
+    # Small chunks keep each snippet on one topic, which sharpens retrieval and
+    # keeps the quoted evidence short enough to read in the UI.
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=120,
+        chunk_size=350,
+        chunk_overlap=60,
         separators=["\n\n", "\n", ". ", " "],
     )
     return splitter.split_documents(docs)
@@ -198,17 +159,47 @@ def load_vectorstore_existing() -> Neo4jVector:
         )
 
 
-def summarize_docs_for_llm(docs: List) -> Tuple[List[str], List[Dict[str, str]]]:
-    """Prepare short snippets for the LLM + a separate list for UI evidence."""
-    snippets: List[str] = []
-    evidences: List[Dict[str, str]] = []
-    for d in docs:
-        text = (d.page_content or "").strip().replace("\n", " ")
-        short = text[:450]
-        src = d.metadata.get("source", "unknown")
-        snippets.append(short)
-        evidences.append({"source": src, "snippet": short})
-    return snippets, evidences
+def _fingerprint(text: str) -> str:
+    """Normalized key used to drop near-duplicate chunks caused by overlap."""
+    return " ".join(text.lower().split())[:160]
+
+
+def build_evidence(scored_docs: List[Tuple[Document, float]]) -> List[Dict]:
+    """Turn scored chunks into numbered, deduplicated evidence for the UI."""
+    evidence: List[Dict] = []
+    seen: set = set()
+
+    for doc, score in scored_docs:
+        if score < RELEVANCE_MIN:
+            continue
+
+        text = " ".join((doc.page_content or "").split())
+        if not text:
+            continue
+
+        key = _fingerprint(text)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        scalar = finbert_scalar(text)
+        sentiment = to_label_and_score(scalar)
+        evidence.append(
+            {
+                "text": text,
+                "source": doc.metadata.get("source", "unknown"),
+                "match_pct": f"{score * 100:.0f}",
+                "scalar": scalar,
+                "label": sentiment["label"],
+                "score_pct": sentiment["score_pct"],
+                "tone": sentiment["tone"],
+            }
+        )
+
+        if len(evidence) == SHOW_K:
+            break
+
+    return evidence
 
 
 # ---------------------------
@@ -275,34 +266,33 @@ def index_text(paste: str, file_text: str, file_name: str) -> str:
 # ---------------------------
 # Query flow (RAG + sentiment)
 # ---------------------------
-def query_rag(question: str):
-    """Retrieve relevant chunks, write a cited answer, and append sentiment + sources."""
+def query_rag(question: str) -> Dict:
+    """Retrieve the best-matching chunks and score the sentiment of that evidence.
+
+    Questions that no indexed chunk answers well enough return empty evidence so
+    the UI can say so instead of citing unrelated text.
+    """
     vs = load_vectorstore_existing()
-    retriever = vs.as_retriever(search_kwargs={"k": 5})
-    docs = retriever.invoke(question)
+    scored_docs = vs.similarity_search_with_score(question, k=TOP_K)
+    evidence = build_evidence(scored_docs)
 
-    if not docs:
-        return {
-            "question": question,
-            "answer": "No relevant context found. Try indexing more text or asking a broader question.",
-        }
+    if not evidence:
+        return {"question": question, "evidence": [], "sentiment": None}
 
-    snippets, evidences = summarize_docs_for_llm(docs)
-    cited_answer = write_cited_answer(question, snippets)
+    scalars = [e["scalar"] for e in evidence]
+    sentiment = to_label_and_score(sum(scalars) / len(scalars))
 
-    scalars = [finbert_scalar(d.page_content) for d in docs]
-    avg_scalar = sum(scalars) / max(len(scalars), 1)
-    sent = to_label_and_score(avg_scalar)
+    # Averaging bullish and bearish evidence lands near zero, which would read as
+    # "Neutral" and hide the disagreement.
+    if max(scalars) > 0.2 and min(scalars) < -0.2:
+        sentiment["label"] = "Mixed"
+        sentiment["tone"] = "neutral"
 
-    srcs = "; ".join(ev["source"] for ev in evidences)
-
-    final_text = (
-        f"{cited_answer}\n\n"
-        f"Overall sentiment: {sent['label']} ({sent['score_pct']}%).\n"
-        f"Sources: {srcs}"
+    sentiment["sources"] = ", ".join(
+        dict.fromkeys(e["source"] for e in evidence)  # unique, order preserved
     )
 
-    return {"question": question, "answer": final_text}
+    return {"question": question, "evidence": evidence, "sentiment": sentiment}
 
 
 # ---------------------------
@@ -361,11 +351,7 @@ def index():
                 return render_template("index.html", message="Please enter a question.")
             try:
                 result = query_rag(q)
-                return render_template(
-                    "index.html",
-                    question=result["question"],
-                    answer=result["answer"],
-                )
+                return render_template("index.html", result=result)
             except Exception as e:
                 logging.exception("Query failed")
                 return render_template("index.html", message=f"Query failed: {e}")
