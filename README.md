@@ -1,6 +1,6 @@
 # Financial Sentiment Analyzer
 
-Paste financial text, ask a question, and get back the exact passages that answer it, along with a bullish, bearish, or neautral sentiment score.
+Paste financial text, ask a question, and get back the exact passages that answer it, along with a bullish, bearish, or neutral sentiment score.
 
 ![App demo](demo_sentiment.gif)
 
