@@ -1,107 +1,88 @@
 # Financial Sentiment Analyzer
 
+Paste financial text, ask a question, and get back the exact passages that answer it — each scored bullish or bearish.
+
 ![App demo](demo_sentiment.gif)
 
-# Description
-  A RAG (Retrieval-Augmented Generation) web app that indexes user-supplied financial text into a Neo4j vector database, retrieves the passages that best answer a question, and scores the sentiment (bullish / bearish) of that evidence using FinBERT.
+## What It Does
 
-  Paste financial articles, research notes, or earnings call snippets (or upload a .txt file), index them, then ask questions. Answers are the source passages themselves, numbered and cited, so nothing is paraphrased or invented. If no passage matches the question closely enough, the app says so instead of citing unrelated text.
+Financial Sentiment Analyzer is a local RAG (Retrieval-Augmented Generation) web app for reading financial text quickly. Paste an article, earnings call notes, or research snippets, and the app splits the text into passages, embeds them, and stores them in a Neo4j vector index.
 
-# Getting Started
-  These instructions will get you a copy of the project up and running on your local machine.
+Ask a question and it returns the closest-matching passages, numbered and cited with a match percentage, then scores each one with FinBERT for bullish/bearish sentiment. Answers are the source text itself, so nothing is paraphrased or invented. If no passage matches the question closely enough, the app says so instead of citing unrelated text.
 
-# Prerequisites
-  - Python 3.8+
-  - pip (Python package manager)
-  - Neo4j database (running locally via Neo4j Desktop or accessible remotely)
-  - Internet connection for initial model downloads
+## Tech Stack
 
-# Technologies Used
-  - Flask (Web Framework)
-  - Neo4j (Vector Database for RAG)
-  - LangChain (Document processing and vector store integration)
-  - Transformers (FinBERT for financial sentiment analysis)
-  - PyTorch (Model inference)
-  - Sentence Transformers (Embeddings)
-  - Bootstrap (UI framework)
-  - Custom CSS (styling)
+| Layer | Tools |
+|-------|-------|
+| Backend | Python, Flask |
+| Vector store | Neo4j vector index |
+| RAG pipeline | LangChain (chunking, embeddings, retrieval) |
+| Embeddings | Sentence Transformers (`all-MiniLM-L6-v2`) |
+| Sentiment | FinBERT (ProsusAI) via Transformers + PyTorch |
+| Frontend | Jinja templates, Bootstrap, custom CSS |
 
-# Installation
-  1. Clone the repository:
-      git clone https://github.com/alcytorres/sentiment_analysis.git
+All models run locally on CPU — no external API calls or keys.
 
-  2. Navigate to the project directory:
-      cd sentiment_analysis
+## Features
 
-  3. Create a virtual environment:
-      python3 -m venv venv
+- **Cited evidence, not guesses** — answers are the retrieved passages, numbered `[1] [2] [3]` with their source and match percentage
+- **Relevance gate** — off-topic questions return "no relevant evidence found" instead of citing unrelated text
+- **Financial sentiment** — FinBERT scores every passage, plus an overall Bullish / Neutral / Mixed / Bearish label
+- **Flexible input** — paste text, attach a `.txt` file, or load the bundled sample financial texts
+- **Local and private** — runs entirely on your machine, no API keys
+- **Dark and light mode** — theme toggle in the top-right corner
 
-  4. Activate the virtual environment:
-      - Windows: venv\Scripts\activate
-      - Mac/Linux: source venv/bin/activate
+## Getting Started
 
-  5. Install dependencies:
-      pip install -r requirements.txt
+### Prerequisites
 
-  6. Set up Neo4j:
-      - Install Neo4j Desktop and create a local instance
-      - Start the instance and note the bolt URI and password
-      - Set environment variables:
-          export NEO4J_PASSWORD="your-password"
-          export NEO4J_URL="bolt://localhost:7687"   # optional, this is the default
-          export NEO4J_USER="neo4j"                  # optional, this is the default
+- Python 3.10+
+- A running Neo4j instance (Neo4j Desktop is easiest locally)
+- Internet connection on the first run, to download the models once
 
-# Starting the Server
-  From the project directory:
-    python3 app.py
+### Setup
 
-  The app will be available at http://127.0.0.1:5000
+1. Clone the repository and enter it:
 
-# Usage
-  1. Index Text:
-     - Paste financial text (articles, research notes, earnings call snippets) into the text area
-     - Optionally attach a .txt file
-     - Click "Index Text" to chunk, embed, and store in Neo4j
-     - Or click "Load Sample Data" to use the bundled sample financial texts
+```bash
+git clone https://github.com/alcytorres/sentiment_analysis.git
+cd sentiment_analysis
+```
 
-  2. Ask Questions:
-     - Type a question about the indexed text (e.g., "What is the sentiment on revenue growth?")
-     - The app retrieves the closest-matching passages and scores their sentiment
+2. Create and activate a virtual environment:
 
-  3. View Results:
-     - Top matching passages, numbered [1], [2], [3], each with its source and match percentage
-     - Overall sentiment label (Very Bullish, Bullish, Neutral, Mixed, Bearish, Very Bearish)
-     - Sentiment score percentage
-     - "No relevant evidence found" when the question is not covered by the indexed text
+```bash
+python3 -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+```
 
-  4. Theme Toggle: Switch between dark mode (default) and light mode using the button in the top-right corner.
+3. Install dependencies:
 
-# Key Features
-  - RAG Architecture: Vector-based retrieval from Neo4j for context-aware answers
-  - Financial Sentiment: FinBERT provides nuanced bullish/bearish classification, per passage and overall
-  - Cited Evidence: Answers are the retrieved passages themselves, numbered and attributed to their source
-  - Relevance Gate: Off-topic questions return "no relevant evidence" instead of unrelated citations
-  - Local AI Models: Runs entirely on CPU with no external API calls
-  - Clean Overwrite: Each index action replaces the previous data for simplicity
-  - Sample Data: Built-in sample financial texts for quick demos
+```bash
+pip install -r requirements.txt
+```
 
-# Environment Variables
-  - NEO4J_PASSWORD (required): Your Neo4j instance password
-  - NEO4J_URL (optional): Connection string (default: bolt://localhost:7687)
-  - NEO4J_USER (optional): Neo4j username (default: neo4j)
-  - RELEVANCE_MIN (optional): Similarity floor for showing evidence, 0-1 (default: 0.30)
+4. Point the app at your Neo4j instance:
 
-# Model Downloads
-  First run will download:
-  - FinBERT (~400MB)
-  - Sentence transformer embeddings (~90MB)
-  Ensure a stable internet connection for initial setup.
+```bash
+export NEO4J_PASSWORD="your-password"
+```
 
-# License
-  This project is open source and available under the MIT License.
+5. Start the server:
 
-# Acknowledgments
-  - ProsusAI for FinBERT model
-  - LangChain community for RAG tools
-  - Neo4j for vector database support
-  - Sentence Transformers for embeddings
+```bash
+python3 app.py
+```
+
+Open http://127.0.0.1:5000, paste financial text (or click **Load Sample Data**), click **Index Text**, then ask a question.
+
+### Optional configuration
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `NEO4J_PASSWORD` | — | Required. Your Neo4j password |
+| `NEO4J_URL` | `bolt://localhost:7687` | Neo4j connection string |
+| `NEO4J_USER` | `neo4j` | Neo4j username |
+| `RELEVANCE_MIN` | `0.65` | Similarity floor (0–1). Raise it to be stricter about what counts as relevant evidence |
+
+First run downloads FinBERT (~400 MB) and the MiniLM embedding model (~90 MB).
