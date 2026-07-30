@@ -1,5 +1,7 @@
 # Financial Sentiment Analyzer
 
+![App demo](demo_sentiment.gif)
+
 # Description
   A RAG (Retrieval-Augmented Generation) web app that indexes user-supplied financial text into a Neo4j vector database, retrieves the passages that best answer a question, and scores the sentiment (bullish / bearish) of that evidence using FinBERT.
 
