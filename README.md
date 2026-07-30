@@ -1,14 +1,13 @@
 # Financial Sentiment Analyzer
 
-Paste financial text, ask a question, and get back the exact passages that answer it — each scored bullish or bearish.
+Paste financial text, ask a question, and get back the exact passages that answer it, along with a bullish or bearish sentiment score.
 
 ![App demo](demo_sentiment.gif)
 
 ## What It Does
+Financial Sentiment Analyzer is a local RAG (Retrieval-Augmented Generation) web app that indexes financial text and answers questions with cited passages and bullish/bearish sentiment.
 
-Financial Sentiment Analyzer is a local RAG (Retrieval-Augmented Generation) web app for reading financial text quickly. Paste an article, earnings call notes, or research snippets, and the app splits the text into passages, embeds them, and stores them in a Neo4j vector index.
-
-Ask a question and it returns the closest-matching passages, numbered and cited with a match percentage, then scores each one with FinBERT for bullish/bearish sentiment. Answers are the source text itself, so nothing is paraphrased or invented. If no passage matches the question closely enough, the app says so instead of citing unrelated text.
+Paste an article, earnings call, or research snippet, then ask a question. The app finds the most relevant passages, cites each one with a match percentage, and uses FinBERT to score the sentiment as bullish, bearish, or neutral. Answers come directly from the source text, so nothing is paraphrased or invented.
 
 ## Tech Stack
 
@@ -76,7 +75,7 @@ python3 app.py
 
 Open http://127.0.0.1:5000, paste financial text (or click **Load Sample Data**), click **Index Text**, then ask a question.
 
-### Optional configuration
+### Configuration
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
